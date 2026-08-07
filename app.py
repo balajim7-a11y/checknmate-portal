@@ -30,7 +30,7 @@ authenticator = stauth.Authenticate(
 
 # --- 4. Render Login Widget (THIS WAS MISSING!) ---
 st.title("♟️ Check N Mate Portal")
-name, authentication_status, username = authenticator.login("main")
+name, authentication_status, username = authenticator.login()
 
 # --- 5. Application Gateway Logic ---
 if authentication_status:
