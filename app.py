@@ -50,5 +50,5 @@ st.write("Enter a plain-text password below to generate a secure hash. Copy the 
 raw_password = st.text_input("Enter a test password (e.g., chess123):")
 if raw_password:
     # Generate the secure hash for the inputted password
-    hashed_password = stauth.Hasher([raw_password]).generate()[0]
+    hashed_password = stauth.Hasher.hash(raw_password)
     st.code(hashed_password)
