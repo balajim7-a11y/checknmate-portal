@@ -28,19 +28,19 @@ authenticator = stauth.Authenticate(
     cookie_expiry_days=30
 )
 
-# --- 4. Render Login Widget (THIS WAS MISSING!) ---
+# --- 4. Render Login Widget ---
 st.title("♟️ Check N Mate Portal")
-name, authentication_status, username = authenticator.login()
+authenticator.login()
 
 # --- 5. Application Gateway Logic ---
-if authentication_status:
+if st.session_state.get("authentication_status"):
     authenticator.logout("Logout", "sidebar")
-    st.write(f"Welcome to the portal, **{name}**!")
+    st.write(f'Welcome to the portal, **{st.session_state["name"]}**!')
     st.success("✅ Login successful! The instructor dashboard will go here in Step 3.")
     
-elif authentication_status is False:
+elif st.session_state.get("authentication_status") is False:
     st.error("Username/password is incorrect. (Make sure you updated your Excel file with real hashes!)")
-elif authentication_status is None:
+elif st.session_state.get("authentication_status") is None:
     st.info("Please enter your username and password.")
 
 # --- TEMPORARY UTILITY: HASH GENERATOR ---
