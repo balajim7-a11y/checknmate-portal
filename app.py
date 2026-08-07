@@ -9,7 +9,7 @@ st.write("Testing the connection to the database...")
 # Try to read the Excel file
 try:
     # We are specifically looking for the 'Users' tab
-    users_df = pd.read_excel("CheckNMate_DB_V2.xlsx", sheet_name="Users")
+    users_df = pd.read_excel("CheckNMate_DB_final.xlsx", sheet_name="Users")
     
     st.success("✅ Success! The cloud server can read the Excel file.")
     
