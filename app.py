@@ -2,12 +2,13 @@ import streamlit as st
 
 st.title("Check N Mate - Fee Dashboard")
 
-# Streamlit will securely grab the database credentials from the cloud
+# Establish connection
 conn = st.connection("postgresql", type="sql")
 
 try:
-    # Query the active roster with a 10-minute cache Time-To-Live
-    students_df = conn.query("SELECT * FROM Students;", ttl="10m")
+    # ttl=0 completely disables the cache for testing
+    students_df = conn.query("SELECT * FROM Students;", ttl=0)
     st.dataframe(students_df)
 except Exception as e:
-    st.warning("Database connected, but no data found. Please run the table creation scripts in Neon.")
+    # This will print the exact backend error to your screen
+    st.error(f"System Error: {e}")
