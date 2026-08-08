@@ -1,4 +1,4 @@
 streamlit
+psycopg2-binary
+sqlalchemy
 pandas
-streamlit-authenticator
-openpyxl
