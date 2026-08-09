@@ -4,6 +4,7 @@ import hashlib
 import json
 import datetime
 import os
+import uuid
 from sqlalchemy import create_engine, text
 
 # --- Configuration ---
@@ -50,16 +51,18 @@ async def razorpay_webhook(request: Request, x_razorpay_signature: str = Header(
                     {"phone": parent_phone}
                 ).fetchone()
 
+                new_txn_id = f"txn_{uuid.uuid4().hex[:12]}"
+
                 if result:
                     student_id = result[0]
                     next_due = payment_date + datetime.timedelta(days=30)
                     
                     conn.execute(
                         text("""
-                            INSERT INTO Fee_Transactions (student_id, amount_paid, payment_mode, payment_date, transaction_status, gateway_reference, logged_by)
-                            VALUES (:s_id, :amt, :mode, :p_date, 'Success', :ref, 1);
+                            INSERT INTO Fee_Transactions (transaction_id, student_id, amount_paid, payment_mode, payment_date, transaction_status, gateway_reference, logged_by)
+                            VALUES (:t_id, :s_id, :amt, :mode, :p_date, 'Success', :ref, 'usr_admin_001');
                         """),
-                        {"s_id": student_id, "amt": amount_paid, "mode": payment_mode, "p_date": payment_date, "ref": gateway_ref}
+                        {"t_id": new_txn_id, "s_id": student_id, "amt": amount_paid, "mode": payment_mode, "p_date": payment_date, "ref": gateway_ref}
                     )
                     
                     conn.execute(
@@ -84,10 +87,10 @@ async def razorpay_webhook(request: Request, x_razorpay_signature: str = Header(
                     # Unmatched / Orphan record logic
                     conn.execute(
                         text("""
-                            INSERT INTO Fee_Transactions (student_id, amount_paid, payment_mode, payment_date, transaction_status, gateway_reference, logged_by)
-                            VALUES (NULL, :amt, :mode, :p_date, 'Unmatched', :ref, 1);
+                            INSERT INTO Fee_Transactions (transaction_id, student_id, amount_paid, payment_mode, payment_date, transaction_status, gateway_reference, logged_by)
+                            VALUES (:t_id, NULL, :amt, :mode, :p_date, 'Unmatched', :ref, 'usr_admin_001');
                         """),
-                        {"amt": amount_paid, "mode": payment_mode, "p_date": payment_date, "ref": gateway_ref}
+                        {"t_id": new_txn_id, "amt": amount_paid, "mode": payment_mode, "p_date": payment_date, "ref": gateway_ref}
                     )
                     
             return {"status": "success", "message": "Webhook processed"}
