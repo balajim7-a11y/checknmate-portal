@@ -273,7 +273,7 @@ with tab4:
                                 UPDATE Students SET account_fee_status = 'Paid' WHERE student_id = :s_id;
                             """), {"s_id": target_student_id})
                             s.commit()
-                        st.success(f"Transaction assigned successfully!")
+                        st.success("Transaction assigned successfully!")
                         st.rerun()
     except Exception as e:
         st.error(f"Error in SuperAdmin Panel: {e}")
