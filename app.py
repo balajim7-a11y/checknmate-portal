@@ -1,6 +1,7 @@
 import streamlit as st
 from sqlalchemy import text
 import datetime
+import uuid
 
 st.set_page_config(page_title="Check N Mate - Operations", layout="wide")
 st.title("Check N Mate - Operations & Fee Dashboard")
@@ -54,7 +55,7 @@ with tab1:
         
         if not student_list.empty:
             st_dict = {row['student_id']: row['full_name'] for _, row in student_list.iterrows()}
-            selected_s_id = st.selectbox("Select Student", options=st_dict.keys(), format_func=lambda x: st_dict[x])
+            selected_s_id = st.selectbox("Select Student", options=list(st_dict.keys()), format_func=lambda x: st_dict[x])
             
             history_df = conn.query("""
                 SELECT 
@@ -100,7 +101,7 @@ with tab2:
                 full_name = st.text_input("Student Full Name")
                 parent_name = st.text_input("Parent Name")
                 parent_phone = st.text_input("Parent Phone Number")
-                selected_batch_id = st.selectbox("Assign Batch", options=batch_options.keys(), format_func=lambda x: batch_options[x])
+                selected_batch_id = st.selectbox("Assign Batch", options=list(batch_options.keys()), format_func=lambda x: batch_options[x])
                 
                 default_fee_val = float(batches_df[batches_df['batch_id'] == selected_batch_id]['default_fee'].values[0])
                 agreed_fee = st.number_input("Agreed Monthly Fee (₹)", min_value=0.0, value=default_fee_val, step=100.0)
@@ -110,32 +111,44 @@ with tab2:
                 
                 if submit_onboard:
                     if full_name and parent_phone:
-                        franchise_id = int(batches_df[batches_df['batch_id'] == selected_batch_id]['franchise_id'].values[0])
+                        franchise_id = batches_df[batches_df['batch_id'] == selected_batch_id]['franchise_id'].values[0]
                         
                         with conn.session as s:
-                            # 1. Create Student Record
-                            res = s.execute(text("""
-                                INSERT INTO Students (full_name, franchise_id, parent_name, parent_phone, account_fee_status, status)
-                                VALUES (:name, :f_id, :p_name, :phone, 'Unpaid', 'Active')
-                                RETURNING student_id;
-                            """), {
-                                "name": full_name, "f_id": franchise_id, 
-                                "p_name": parent_name, "phone": parent_phone
-                            })
-                            new_student_id = res.fetchone()[0]
+                            # --- 1. CHECK FOR DUPLICATE ---
+                            existing_student = s.execute(text("""
+                                SELECT student_id FROM Students 
+                                WHERE LOWER(full_name) = LOWER(:name) 
+                                AND parent_phone = :phone 
+                                LIMIT 1;
+                            """), {"name": full_name.strip(), "phone": parent_phone.strip()}).fetchone()
                             
-                            # 2. Assign to Batch
-                            s.execute(text("""
-                                INSERT INTO Student_Batches (student_id, batch_id, enrollment_date, agreed_fee, next_due_date, enrollment_status)
-                                VALUES (:s_id, :b_id, CURRENT_DATE, :fee, :due, 'Active');
-                            """), {
-                                "s_id": new_student_id, "b_id": selected_batch_id,
-                                "fee": agreed_fee, "due": due_date
-                            })
-                            s.commit()
-                            
-                        st.success(f"Successfully onboarded {full_name}!")
-                        st.rerun()
+                            if existing_student:
+                                st.warning(f"⚠️ A student named '{full_name}' with phone '{parent_phone}' is already registered in the system.")
+                            else:
+                                # --- 2. PROCEED WITH INSERTION ---
+                                new_student_id = f"std_{uuid.uuid4().hex[:12]}"
+                                
+                                s.execute(text("""
+                                    INSERT INTO Students (student_id, full_name, franchise_id, parent_name, parent_phone, account_fee_status, status)
+                                    VALUES (:s_id, :name, :f_id, :p_name, :phone, 'Unpaid', 'Active');
+                                """), {
+                                    "s_id": new_student_id,
+                                    "name": full_name.strip(), "f_id": franchise_id, 
+                                    "p_name": parent_name.strip() if parent_name else None, 
+                                    "phone": parent_phone.strip()
+                                })
+                                
+                                s.execute(text("""
+                                    INSERT INTO Student_Batches (student_id, batch_id, enrollment_date, agreed_fee, next_due_date, enrollment_status)
+                                    VALUES (:s_id, :b_id, CURRENT_DATE, :fee, :due, 'Active');
+                                """), {
+                                    "s_id": new_student_id, "b_id": selected_batch_id,
+                                    "fee": agreed_fee, "due": due_date
+                                })
+                                s.commit()
+                                
+                                st.success(f"Successfully onboarded {full_name}!")
+                                st.rerun()
                     else:
                         st.warning("Please fill in required fields (Name and Parent Phone).")
         else:
@@ -163,7 +176,7 @@ with tab3:
             }
             
             with st.form("manual_payment_form", clear_on_submit=True):
-                pay_student_id = st.selectbox("Select Student", options=student_map.keys(), format_func=lambda x: student_map[x])
+                pay_student_id = st.selectbox("Select Student", options=list(student_map.keys()), format_func=lambda x: student_map[x])
                 amount_paid = st.number_input("Amount Paid (₹)", min_value=0.0, step=100.0)
                 payment_mode = st.selectbox("Payment Mode", ["Cash", "UPI Direct", "Bank Transfer"])
                 payment_date = st.date_input("Payment Date", datetime.date.today())
@@ -172,15 +185,17 @@ with tab3:
                 
                 if submit_payment and amount_paid > 0:
                     selected_row = active_students[active_students['student_id'] == pay_student_id].iloc[0]
-                    b_id = int(selected_row['batch_id'])
+                    b_id = selected_row['batch_id']
                     next_due = payment_date + datetime.timedelta(days=30)
+                    
+                    new_txn_id = f"txn_{uuid.uuid4().hex[:12]}"
                     
                     with conn.session as s:
                         s.execute(text("""
-                            INSERT INTO Fee_Transactions (student_id, amount_paid, payment_mode, payment_date, transaction_status, logged_by, for_batch_id)
-                            VALUES (:s_id, :amt, :mode, :p_date, 'Success', 1, :b_id);
+                            INSERT INTO Fee_Transactions (transaction_id, student_id, amount_paid, payment_mode, payment_date, transaction_status, logged_by, for_batch_id)
+                            VALUES (:t_id, :s_id, :amt, :mode, :p_date, 'Success', 'usr_admin_001', :b_id);
                         """), {
-                            "s_id": pay_student_id, "amt": amount_paid, 
+                            "t_id": new_txn_id, "s_id": pay_student_id, "amt": amount_paid, 
                             "mode": payment_mode, "p_date": payment_date, "b_id": b_id
                         })
                         
@@ -235,19 +250,19 @@ with tab4:
                 with st.form("resolve_form", clear_on_submit=True):
                     col1, col2 = st.columns(2)
                     with col1:
-                        target_txn_id = st.number_input("Transaction ID to Resolve", min_value=1, step=1)
+                        target_txn_id = st.text_input("Transaction ID to Resolve (Copy from table)")
                     with col2:
-                        target_student_id = st.selectbox("Select Student", options=s_options.keys(), format_func=lambda x: s_options[x])
+                        target_student_id = st.selectbox("Select Student", options=list(s_options.keys()), format_func=lambda x: s_options[x])
                         
                     resolve_btn = st.form_submit_button("Assign & Resolve", type="primary")
                     
-                    if resolve_btn:
+                    if resolve_btn and target_txn_id:
                         with conn.session as s:
                             s.execute(text("""
                                 UPDATE Fee_Transactions 
                                 SET student_id = :s_id, transaction_status = 'Success' 
                                 WHERE transaction_id = :t_id AND transaction_status = 'Unmatched';
-                            """), {"s_id": target_student_id, "t_id": target_txn_id})
+                            """), {"s_id": target_student_id, "t_id": target_txn_id.strip()})
                             
                             new_due = datetime.date.today() + datetime.timedelta(days=30)
                             s.execute(text("""
@@ -258,7 +273,7 @@ with tab4:
                                 UPDATE Students SET account_fee_status = 'Paid' WHERE student_id = :s_id;
                             """), {"s_id": target_student_id})
                             s.commit()
-                        st.success(f"Transaction #{target_txn_id} successfully assigned!")
+                        st.success(f"Transaction assigned successfully!")
                         st.rerun()
     except Exception as e:
         st.error(f"Error in SuperAdmin Panel: {e}")
