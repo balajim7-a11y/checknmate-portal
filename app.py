@@ -1,6 +1,7 @@
-import streamlit as st
+import json
 import pandas as pd
 import razorpay
+import streamlit as st
 from twilio.rest import Client
 
 # --- PAGE CONFIGURATION ---
@@ -45,16 +46,13 @@ def trigger_whatsapp_reminder(student_name: str, parent_phone: str, amount: int)
     )
     short_url = payment_link["short_url"]
 
-    # 2. Dispatch WhatsApp message via Twilio Sandbox
-    message_body = (
-        f"Hi from Check N Mate! ♟️\n\n"
-        f"This is an automated reminder that the fee of ₹{amount} for {student_name} is due in 3 days.\n\n"
-        f"Pay securely here: {short_url}\n\n"
-        f"Thank you!"
-    )
-
+    # 2. Dispatch WhatsApp message using Twilio's approved Sandbox Template
     message = twilio_client.messages.create(
-        body=message_body,
+        content_sid="HXfe5ab5f00277942d4d4200328b4d403c", # Template ID from your Twilio console
+        content_variables=json.dumps({
+            "1": student_name, 
+            "2": short_url
+        }),
         from_=st.secrets["twilio"]["sandbox_number"],
         to=f"whatsapp:{parent_phone}",
     )
