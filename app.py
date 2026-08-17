@@ -1,3 +1,4 @@
+import json
 import pandas as pd
 import razorpay
 import streamlit as st
@@ -17,7 +18,7 @@ conn = init_connection()
 
 # --- NOTIFICATION & PAYMENT LOGIC ---
 def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: int, message_type: str):
-    """Generates a Razorpay link and sends a contextual WhatsApp message."""
+    """Smart sender: Tries custom message first, falls back to guaranteed template if session is closed."""
     
     rzp_client = razorpay.Client(auth=(st.secrets["razorpay"]["key_id"], st.secrets["razorpay"]["key_secret"]))
     twilio_client = Client(st.secrets["twilio"]["account_sid"], st.secrets["twilio"]["auth_token"])
@@ -32,44 +33,64 @@ def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: int,
     })
     short_url = payment_link["short_url"]
 
-    # 2. Determine Message Context
+    # 2. Build Custom Message Content
     if message_type == "upcoming":
-        body = (
+        custom_body = (
             f"Hi from Check N Mate! ♟️\n\n"
             f"This is an automated reminder that the fee of ₹{amount} for {student_name} is due in 3 days.\n\n"
             f"Pay securely here: {short_url}\n\n"
             f"Thank you!"
         )
-    elif message_type == "overdue":
-        body = (
+    else:
+        custom_body = (
             f"URGENT: Hi from Check N Mate! ♟️\n\n"
             f"The fee of ₹{amount} for {student_name} is currently OVERDUE.\n\n"
             f"Please complete your payment immediately using this secure link: {short_url}\n\n"
             f"Thank you!"
         )
 
-    # 3. Dispatch via Twilio (Requires active 24hr session window in Sandbox)
-    message = twilio_client.messages.create(
-        body=body,
-        from_=st.secrets["twilio"]["sandbox_number"],
-        to=f"whatsapp:{parent_phone}",
-    )
-    
-    return short_url, message.sid
-
+    try:
+        # 3. Attempt Custom Free-Form Message (Requires open 24hr window)
+        message = twilio_client.messages.create(
+            body=custom_body,
+            from_=st.secrets["twilio"]["sandbox_number"],
+            to=f"whatsapp:{parent_phone}",
+        )
+        return short_url, message.sid, "Custom Text"
+        
+    except Exception as e:
+        # 4. Fallback to Guaranteed Twilio Template if 24hr window is closed
+        if "ContentSid Required" in str(e) or "400" in str(e):
+            status_label = f"{student_name} [FEE {message_type.upper()}]"
+            message = twilio_client.messages.create(
+                content_sid="HXfe5ab5f00277942d4d4200328b4d403c", 
+                content_variables=json.dumps({
+                    "1": status_label, 
+                    "2": short_url
+                }),
+                from_=st.secrets["twilio"]["sandbox_number"],
+                to=f"whatsapp:{parent_phone}",
+            )
+            return short_url, message.sid, "Template Fallback"
+        else:
+            # If it's a completely different error (like wrong phone number), raise it
+            raise e
 
 # --- DASHBOARD UI & TABS ---
-tab1, tab2 = st.tabs(["📊 Global Roster", "⚙️ Run Daily Batch Automations"])
+tab1, tab2, tab3 = st.tabs(["📊 Global Roster", "⚙️ Run Daily Batch Automations", "📲 Single Demo Trigger"])
 
 # TAB 1: Database View
 with tab1:
     st.header("Active Student Roster")
     st.write("Live synchronization with PostgreSQL backend.")
+    if st.button("🔄 Refresh Data"):
+        st.cache_data.clear()
+        
     try:
-        df = conn.query("SELECT * FROM Students;", ttl="0m") # 0m forces fresh data
+        df = conn.query("SELECT * FROM Students ORDER BY due_date ASC;", ttl="0m")
         st.dataframe(df, use_container_width=True)
     except Exception as e:
-        st.warning("Ensure your 'Students' table is finalized in Neon with columns: student_name, parent_phone, fee_amount, due_date, payment_status.")
+        st.warning("Ensure your 'Students' table is finalized in Neon.")
 
 # TAB 2: Batch Processing Engine
 with tab2:
@@ -81,13 +102,10 @@ with tab2:
             try:
                 # Fetch fresh data
                 df = conn.query("SELECT * FROM Students WHERE payment_status = 'Pending';", ttl="0m")
-                
-                # Convert due_date string/db-date to Pandas datetime for math
                 df['due_date'] = pd.to_datetime(df['due_date']).dt.date
                 today = datetime.now().date()
                 three_days_from_now = today + timedelta(days=3)
 
-                # Isolate the target records
                 upcoming_students = df[df['due_date'] == three_days_from_now]
                 overdue_students = df[df['due_date'] < today]
 
@@ -98,8 +116,8 @@ with tab2:
                     st.write(f"**Processing {len(upcoming_students)} Upcoming Reminders:**")
                     for index, row in upcoming_students.iterrows():
                         try:
-                            link, sid = dispatch_whatsapp_payload(row['student_name'], row['parent_phone'], row['fee_amount'], "upcoming")
-                            st.success(f"✅ Upcoming Reminder sent to {row['student_name']} ({row['parent_phone']}) - Link: {link}")
+                            link, sid, msg_type = dispatch_whatsapp_payload(row['student_name'], row['parent_phone'], row['fee_amount'], "upcoming")
+                            st.success(f"✅ Sent to {row['student_name']} (via {msg_type}) - Link: {link}")
                         except Exception as e:
                             st.error(f"❌ Failed to send to {row['student_name']}: {e}")
                 else:
@@ -110,8 +128,8 @@ with tab2:
                     st.write(f"**Processing {len(overdue_students)} Overdue Notices:**")
                     for index, row in overdue_students.iterrows():
                         try:
-                            link, sid = dispatch_whatsapp_payload(row['student_name'], row['parent_phone'], row['fee_amount'], "overdue")
-                            st.warning(f"⚠️ Overdue Notice sent to {row['student_name']} ({row['parent_phone']}) - Link: {link}")
+                            link, sid, msg_type = dispatch_whatsapp_payload(row['student_name'], row['parent_phone'], row['fee_amount'], "overdue")
+                            st.warning(f"⚠️ Sent to {row['student_name']} (via {msg_type}) - Link: {link}")
                         except Exception as e:
                             st.error(f"❌ Failed to send to {row['student_name']}: {e}")
                 else:
@@ -119,3 +137,32 @@ with tab2:
 
             except Exception as e:
                 st.error(f"Database operation failed: {e}")
+
+# TAB 3: Single Test Trigger
+with tab3:
+    st.header("Interactive Demo Trigger")
+    st.write("Use this to fire a custom test message to any number right now.")
+    with st.form("demo_form"):
+        col1, col2 = st.columns(2)
+        with col1:
+            demo_name = st.text_input("Student Name", value="Demo User")
+            demo_amount = st.number_input("Fee Amount (₹)", value=1500, step=100)
+            demo_type = st.selectbox("Message Context", ["upcoming", "overdue"])
+        with col2:
+            demo_phone = st.text_input("Parent Phone (E.164 Format)", value="+919019011331")
+            
+        submit_btn = st.form_submit_button("Fire Test Payload")
+
+        if submit_btn:
+            with st.spinner("Generating Link & Dispatching WhatsApp..."):
+                try:
+                    link, sid, msg_type = dispatch_whatsapp_payload(
+                        student_name=demo_name,
+                        parent_phone=demo_phone,
+                        amount=demo_amount,
+                        message_type=demo_type
+                    )
+                    st.success(f"✅ Message delivered via {msg_type}!")
+                    st.info(f"**Razorpay Short URL Generated:** {link}")
+                except Exception as e:
+                    st.error(f"Failed to execute workflow: {e}")
