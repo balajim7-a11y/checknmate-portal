@@ -47,6 +47,7 @@ def trigger_whatsapp_reminder(student_name: str, parent_phone: str, amount: int)
     short_url = payment_link["short_url"]
 
     # 2. Dispatch WhatsApp message using Twilio's approved Sandbox Template
+    # We must use content_sid and content_variables for Twilio trial accounts
     message = twilio_client.messages.create(
         content_sid="HXfe5ab5f00277942d4d4200328b4d403c", # Template ID from your Twilio console
         content_variables=json.dumps({
