@@ -5,6 +5,55 @@ import streamlit as st
 from twilio.rest import Client
 from datetime import datetime, timedelta
 
+import time
+
+# --- 1. ADMIN AUTHENTICATION LOCK ---
+def check_password():
+    """Returns `True` if the user has the correct password."""
+    def password_entered():
+        if st.session_state["password"] == st.secrets["admin_password"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # Remove password from state for security
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        # First run, show input
+        st.text_input("🔒 Enter Admin Password", type="password", on_change=password_entered, key="password")
+        return False
+    elif not st.session_state["password_correct"]:
+        # Password incorrect, show input + error
+        st.text_input("🔒 Enter Admin Password", type="password", on_change=password_entered, key="password")
+        st.error("😕 Password incorrect")
+        return False
+    
+    # Password correct
+    return True
+
+if not check_password():
+    st.stop()  # Do not render the rest of the app if not logged in
+
+# ... (The rest of your database connection code goes here) ...
+
+# --- 2. PAYMENT LINK EXPIRY FIX ---
+def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: int, message_type: str):
+    rzp_client = razorpay.Client(auth=(st.secrets["razorpay"]["key_id"], st.secrets["razorpay"]["key_secret"]))
+    twilio_client = Client(st.secrets["twilio"]["account_sid"], st.secrets["twilio"]["auth_token"])
+
+    # Set the link to automatically expire in 3 days (converted to a Unix Timestamp)
+    expiry_timestamp = int(time.time()) + (3 * 24 * 60 * 60)
+
+    payment_link = rzp_client.payment_link.create({
+        "amount": int(amount * 100),  
+        "currency": "INR",
+        "expire_by": expiry_timestamp, # <--- Link self-destructs after 3 days
+        "description": f"Fee payment for {student_name}",
+        "customer": {"name": student_name, "contact": parent_phone},
+        "notify": {"sms": False, "email": False},
+    })
+    
+    # ... (The rest of your messaging logic goes here) ...
+
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Check N Mate Admin", page_icon="♟️", layout="wide")
 st.title("♟️ Check N Mate - Admin Dashboard")
