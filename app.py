@@ -90,6 +90,7 @@ def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: floa
     else:
         custom_body = f"URGENT: Hi from Check N Mate! ♟️\n\nThe fee of ₹{int(amount)} for {student_name} is currently OVERDUE.\n\nPlease complete the payment using this link: {short_url}\n\nThank you!"
 
+    # 3. Attempt Delivery with Template Fallback (Free Trial Fix applied)
     try:
         message = twilio_client.messages.create(
             body=custom_body,
@@ -98,15 +99,20 @@ def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: floa
         )
         return short_url, message.sid, "Custom Message"
     except Exception as e:
-        if "ContentSid Required" in str(e) or "400" in str(e):
-            status_label = f"{student_name} [FEE {message_type.upper()}]"
+        # If outside the 24-hour window, the custom message fails.
+        if "400" in str(e) or "Content" in str(e):
+            
+            # We use a string that perfectly matches Twilio's Sandbox Template: "Your {{1}} code is {{2}}"
+            status_label = f"{student_name} [{message_type.upper()} FEE]"
+            fallback_body = f"Your {status_label} code is {short_url}"
+            
+            # Send as a standard string to bypass the Trial Account 'content_sid' restriction
             message = twilio_client.messages.create(
-                content_sid="HXfe5ab5f00277942d4d4200328b4d403c",
-                content_variables=json.dumps({"1": status_label, "2": short_url}),
+                body=fallback_body,
                 from_=st.secrets["twilio"]["sandbox_number"],
                 to=f"whatsapp:{parent_phone}"
             )
-            return short_url, message.sid, "Approved Template (Fallback)"
+            return short_url, message.sid, "Sandbox Template (Fallback)"
         else:
             raise e
 
@@ -153,14 +159,20 @@ with tab2:
                     if not upcoming_students.empty:
                         st.subheader(f"Upcoming Reminders ({len(upcoming_students)})")
                         for _, row in upcoming_students.iterrows():
-                            link, sid, delivery_type = dispatch_whatsapp_payload(row['student_name'], row['parent_phone'], row['fee_amount'], "upcoming")
-                            st.success(f"✅ Sent to **{row['student_name']}** via {delivery_type} | [Link]({link})")
+                            try:
+                                link, sid, delivery_type = dispatch_whatsapp_payload(row['student_name'], row['parent_phone'], row['fee_amount'], "upcoming")
+                                st.success(f"✅ Sent to **{row['student_name']}** via {delivery_type} | [Link]({link})")
+                            except Exception as err:
+                                st.error(f"❌ Failed for {row['student_name']}: {err}")
                             
                     if not overdue_students.empty:
                         st.subheader(f"Overdue Notices ({len(overdue_students)})")
                         for _, row in overdue_students.iterrows():
-                            link, sid, delivery_type = dispatch_whatsapp_payload(row['student_name'], row['parent_phone'], row['fee_amount'], "overdue")
-                            st.warning(f"⚠️ Sent to **{row['student_name']}** via {delivery_type} | [Link]({link})")
+                            try:
+                                link, sid, delivery_type = dispatch_whatsapp_payload(row['student_name'], row['parent_phone'], row['fee_amount'], "overdue")
+                                st.warning(f"⚠️ Sent to **{row['student_name']}** via {delivery_type} | [Link]({link})")
+                            except Exception as err:
+                                st.error(f"❌ Failed for {row['student_name']}: {err}")
             except Exception as e:
                 st.error(f"Database batch operation failed: {e}")
 
