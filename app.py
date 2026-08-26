@@ -49,7 +49,7 @@ def login_screen():
 
 if not st.session_state["logged_in"]:
     login_screen()
-    st.stop() # Halt execution if not logged in
+    st.stop() 
 
 # --- SIDEBAR: USER INFO & LOGOUT ---
 with st.sidebar:
@@ -117,7 +117,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "📊 Active Roster", 
     "⚙️ Run Automations", 
     "🗓️ Manage Due Dates", 
-    "🧑‍🎓 Manage Students"
+    "🧑‍🎓 Student Management"
 ])
 
 # --- TAB 1: ACTIVE ROSTER ---
@@ -132,7 +132,7 @@ with tab1:
         df = conn.query("SELECT id, student_name, parent_phone, fee_amount, due_date, payment_status, last_updated_by FROM Students ORDER BY due_date ASC;", ttl="0m")
         st.dataframe(df, use_container_width=True, hide_index=True)
     except Exception as e:
-        st.error(f"Database Error: {e}. (Make sure you have run the ALTER TABLE command in Neon to add the 'last_updated_by' column).")
+        st.error(f"Database Error: {e}")
 
 # --- TAB 2: BATCH AUTOMATIONS ---
 with tab2:
@@ -164,7 +164,7 @@ with tab2:
             except Exception as e:
                 st.error(f"Database batch operation failed: {e}")
 
-# --- TAB 3: MANAGE DUE DATES (Bulk Testing) ---
+# --- TAB 3: MANAGE DUE DATES ---
 with tab3:
     st.header("🗓️ Bulk Update Due Dates")
     st.info("💡 Set all records at once to test the automated rules in Tab 2.")
@@ -186,16 +186,30 @@ with tab3:
             except Exception as e:
                 st.error(f"Bulk update failed: {e}")
 
-# --- TAB 4: MANAGE STUDENTS (CRUD + Audit) ---
+# --- TAB 4: STUDENT MANAGEMENT (Comprehensive View) ---
 with tab4:
-    st.header("🧑‍🎓 Student Directory")
+    st.header("🧑‍🎓 Student Directory & Operations")
     
-    action = st.radio("Select Action:", ["➕ Add New Student", "✏️ Update Existing Record", "❌ Remove Student"], horizontal=True)
-    st.divider()
+    # 1. READ: Display All Students
+    st.subheader("Current Database View")
+    try:
+        df_students = conn.query("SELECT id, student_name, parent_phone, fee_amount, due_date, payment_status, last_updated_by FROM Students ORDER BY student_name;", ttl="0m")
+        if not df_students.empty:
+            st.dataframe(df_students, use_container_width=True, hide_index=True)
+        else:
+            st.info("No students found in the database.")
+    except Exception as e:
+        st.error(f"Error loading students: {e}")
+        df_students = pd.DataFrame() 
 
-    # ACTION 1: ADD
-    if action == "➕ Add New Student":
-        st.subheader("Enroll New Student")
+    st.divider()
+    st.subheader("Administrative Actions")
+    
+    # Nested tabs for clean operations
+    action_tabs = st.tabs(["➕ Enroll Student", "✏️ Update Profile", "❌ Remove Student"])
+
+    # CREATE
+    with action_tabs[0]:
         with st.form("add_student_form"):
             c1, c2 = st.columns(2)
             with c1:
@@ -206,27 +220,29 @@ with tab4:
                 new_due_date = st.date_input("First Due Date")
                 new_status = st.selectbox("Status", ["Pending", "Paid"])
                 
-            if st.form_submit_button("Add Student"):
+            if st.form_submit_button("Add to Database"):
                 if not new_name or not new_phone:
                     st.error("Name and Phone required.")
                 else:
-                    with conn.session as session:
-                        session.execute(
-                            text("INSERT INTO Students (student_name, parent_phone, fee_amount, due_date, payment_status, last_updated_by) VALUES (:name, :phone, :amt, :date, :status, :user)"),
-                            {"name": new_name, "phone": new_phone, "amt": new_amount, "date": new_due_date, "status": new_status, "user": st.session_state["username"]}
-                        )
-                        session.commit()
-                    st.success(f"Added {new_name}!")
-                    st.cache_data.clear()
+                    try:
+                        with conn.session as session:
+                            session.execute(
+                                text("INSERT INTO Students (student_name, parent_phone, fee_amount, due_date, payment_status, last_updated_by) VALUES (:name, :phone, :amt, :date, :status, :user)"),
+                                {"name": new_name, "phone": new_phone, "amt": new_amount, "date": new_due_date, "status": new_status, "user": st.session_state["username"]}
+                            )
+                            session.commit()
+                        st.success(f"Added {new_name}!")
+                        st.cache_data.clear()
+                    except Exception as e:
+                        st.error(f"Error adding student: {e}")
 
-    # ACTION 2: UPDATE
-    elif action == "✏️ Update Existing Record":
-        st.subheader("Modify Student Details")
-        df_students = conn.query("SELECT id, student_name, parent_phone, fee_amount, due_date, payment_status FROM Students ORDER BY student_name;", ttl="0m")
+    # UPDATE
+    with action_tabs[1]:
         if not df_students.empty:
             student_map = dict(zip(df_students['student_name'], df_students['id']))
             selected = st.selectbox("Select Student to Update", list(student_map.keys()))
             
+            # Fetch current row data dynamically
             curr_data = df_students[df_students['student_name'] == selected].iloc[0]
             
             with st.form("update_student_form"):
@@ -239,31 +255,37 @@ with tab4:
                     upd_status = st.selectbox("Status", ["Pending", "Paid"], index=0 if curr_data['payment_status'] == "Pending" else 1)
                 
                 if st.form_submit_button("Save Changes"):
-                    with conn.session as session:
-                        session.execute(
-                            text("UPDATE Students SET parent_phone=:phone, fee_amount=:amt, due_date=:date, payment_status=:status, last_updated_by=:user WHERE id=:id"),
-                            {"phone": upd_phone, "amt": upd_amount, "date": upd_date, "status": upd_status, "user": st.session_state["username"], "id": int(student_map[selected])}
-                        )
-                        session.commit()
-                    st.success(f"Updated {selected}'s profile!")
-                    st.cache_data.clear()
+                    try:
+                        with conn.session as session:
+                            session.execute(
+                                text("UPDATE Students SET parent_phone=:phone, fee_amount=:amt, due_date=:date, payment_status=:status, last_updated_by=:user WHERE id=:id"),
+                                {"phone": upd_phone, "amt": upd_amount, "date": upd_date, "status": upd_status, "user": st.session_state["username"], "id": int(student_map[selected])}
+                            )
+                            session.commit()
+                        st.success(f"Updated {selected}'s profile!")
+                        st.cache_data.clear()
+                    except Exception as e:
+                        st.error(f"Error updating student: {e}")
         else:
-            st.info("No students in database.")
+            st.info("No records available to update.")
 
-    # ACTION 3: REMOVE (Restricted Role Access)
-    elif action == "❌ Remove Student":
-        st.subheader("Delete Student Record")
+    # DELETE
+    with action_tabs[2]:
         if st.session_state["role"] == "Franchise":
             st.error("🚫 Access Denied: Franchise users cannot permanently delete records. Please contact Company Admin.")
         else:
-            df_students = conn.query("SELECT id, student_name FROM Students ORDER BY student_name;", ttl="0m")
             if not df_students.empty:
                 student_map = dict(zip(df_students['student_name'], df_students['id']))
                 del_selected = st.selectbox("Select Student to Permanently Delete", list(student_map.keys()))
                 
-                if st.button("⚠️ Permanently Delete", type="primary"):
-                    with conn.session as session:
-                        session.execute(text("DELETE FROM Students WHERE id=:id"), {"id": int(student_map[del_selected])})
-                        session.commit()
-                    st.success(f"Deleted {del_selected} from the database.")
-                    st.cache_data.clear()
+                if st.button("⚠️ Permanently Delete Record", type="primary"):
+                    try:
+                        with conn.session as session:
+                            session.execute(text("DELETE FROM Students WHERE id=:id"), {"id": int(student_map[del_selected])})
+                            session.commit()
+                        st.success(f"Deleted {del_selected} from the database.")
+                        st.cache_data.clear()
+                    except Exception as e:
+                        st.error(f"Error deleting student: {e}")
+            else:
+                st.info("No records available to delete.")
