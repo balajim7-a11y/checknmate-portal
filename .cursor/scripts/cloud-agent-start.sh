@@ -37,7 +37,9 @@ CREATE TABLE IF NOT EXISTS Students (
   parent_phone TEXT NOT NULL,
   fee_amount DOUBLE PRECISION NOT NULL,
   due_date DATE NOT NULL,
-  payment_status TEXT NOT NULL DEFAULT 'Pending'
+  payment_status TEXT NOT NULL DEFAULT 'Pending',
+  franchise_name TEXT DEFAULT 'Company HQ',
+  last_updated_by TEXT DEFAULT 'system'
 );
 SQL
 
@@ -51,6 +53,8 @@ write_streamlit_secrets() {
   mkdir -p /workspace/.streamlit
   cat > /workspace/.streamlit/secrets.toml <<EOF
 admin_password = "${ADMIN_PASSWORD:-devadmin123}"
+company_password = "${COMPANY_PASSWORD:-devcompany123}"
+franchise_password = "${FRANCHISE_PASSWORD:-devfranchise123}"
 
 [connections.postgresql]
 dialect = "postgresql"
