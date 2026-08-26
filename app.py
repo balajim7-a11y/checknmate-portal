@@ -205,7 +205,6 @@ with tab4:
     st.divider()
     st.subheader("Administrative Actions")
     
-    # Nested tabs for clean operations
     action_tabs = st.tabs(["➕ Enroll Student", "✏️ Update Profile", "❌ Remove Student"])
 
     # CREATE
@@ -242,7 +241,6 @@ with tab4:
             student_map = dict(zip(df_students['student_name'], df_students['id']))
             selected = st.selectbox("Select Student to Update", list(student_map.keys()))
             
-            # Fetch current row data dynamically
             curr_data = df_students[df_students['student_name'] == selected].iloc[0]
             
             with st.form("update_student_form"):
@@ -269,7 +267,7 @@ with tab4:
         else:
             st.info("No records available to update.")
 
-    # DELETE
+    # DELETE (With Safety Checkbox)
     with action_tabs[2]:
         if st.session_state["role"] == "Franchise":
             st.error("🚫 Access Denied: Franchise users cannot permanently delete records. Please contact Company Admin.")
@@ -278,13 +276,21 @@ with tab4:
                 student_map = dict(zip(df_students['student_name'], df_students['id']))
                 del_selected = st.selectbox("Select Student to Permanently Delete", list(student_map.keys()))
                 
-                if st.button("⚠️ Permanently Delete Record", type="primary"):
+                st.warning(f"You are about to permanently remove **{del_selected}** from the database. This action cannot be undone.")
+                
+                # The safety lock checkbox
+                confirm_delete = st.checkbox("I confirm that I want to delete this record.")
+                
+                # The button is disabled until the checkbox is ticked
+                if st.button("⚠️ Permanently Delete Record", type="primary", disabled=not confirm_delete):
                     try:
                         with conn.session as session:
                             session.execute(text("DELETE FROM Students WHERE id=:id"), {"id": int(student_map[del_selected])})
                             session.commit()
                         st.success(f"Deleted {del_selected} from the database.")
                         st.cache_data.clear()
+                        time.sleep(1) # Brief pause so the user sees the success message before refresh
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Error deleting student: {e}")
             else:
