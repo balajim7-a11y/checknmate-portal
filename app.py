@@ -70,27 +70,28 @@ FRANCHISE_OPTIONS = ["Company HQ", "Whitefield Center", "Attibele Center", "Myso
 
 # --- 4. PAYMENT & MESSAGING ENGINE ---
 def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: float, message_type: str):
-    # 1. SMART PHONE FORMATTER (Strips spaces/dashes and ensures +91)
+    # 1. BULLETPROOF PHONE FORMATTING (Receiver)
     raw_phone = ''.join(filter(str.isdigit, str(parent_phone)))
-    
     if len(raw_phone) == 10:
         clean_phone = f"+91{raw_phone}"
-    elif len(raw_phone) > 10:
+    elif raw_phone.startswith("91") and len(raw_phone) == 12:
         clean_phone = f"+{raw_phone}"
     else:
-        raise Exception("Phone number is too short to be valid.")
+        clean_phone = f"+{raw_phone}"
         
-    # 2. Guarantee the sender number has the 'whatsapp:' prefix
-    sender_number = st.secrets["twilio"]["sandbox_number"].strip()
-    if not sender_number.startswith("whatsapp:"):
-        sender_number = "whatsapp:" + sender_number
+    recipient_number = f"whatsapp:{clean_phone}"
+
+    # 2. BULLETPROOF PHONE FORMATTING (Sender / Twilio Sandbox)
+    # This guarantees it sends via WhatsApp, preventing the HTTP 422 SMS Error
+    raw_sandbox = ''.join(filter(str.isdigit, str(st.secrets["twilio"]["sandbox_number"])))
+    sender_number = f"whatsapp:+{raw_sandbox}"
 
     rzp_client = razorpay.Client(auth=(st.secrets["razorpay"]["key_id"], st.secrets["razorpay"]["key_secret"]))
     twilio_client = Client(st.secrets["twilio"]["account_sid"], st.secrets["twilio"]["auth_token"])
 
     expiry_timestamp = int(time.time()) + (3 * 24 * 60 * 60)
 
-    # 1. CREATE RAZORPAY LINK
+    # 3. CREATE RAZORPAY LINK
     try:
         payment_link = rzp_client.payment_link.create({
             "amount": int(amount * 100),
@@ -103,22 +104,40 @@ def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: floa
     except Exception as rzp_error:
         raise Exception(f"[Razorpay Blocked] {rzp_error}")
 
-    # 2. CREATE CUSTOM TWILIO TEXT
+    # 4. CREATE CUSTOM TWILIO TEXT
     if message_type == "upcoming":
         custom_body = f"Hi from Check N Mate! ♟️\n\nThis is a reminder that the fee of ₹{int(amount)} for {student_name} is due in 3 days.\n\nPay securely here: {short_url}\n\nThank you!"
     else:
         custom_body = f"URGENT: Hi from Check N Mate! ♟️\n\nThe fee of ₹{int(amount)} for {student_name} is currently OVERDUE.\n\nPlease complete the payment using this link: {short_url}\n\nThank you!"
 
-    # 3. ATTEMPT TWILIO DISPATCH
+    # 5. ATTEMPT TWILIO DISPATCH
     try:
         message = twilio_client.messages.create(
             body=custom_body,
             from_=sender_number, 
-            to=f"whatsapp:{clean_phone}"
+            to=recipient_number
         )
         return short_url, message.sid, "Custom Message"
     except Exception as e:
-        raise Exception(f"HTTP Error: {str(e)}")
+        error_string = str(e)
+        
+        # The SMART FALLBACK: If 24hr window is closed, Twilio demands an approved template.
+        if "ContentSid" in error_string or "400" in error_string:
+            
+            # This matches Twilio's globally approved default: "Your {{1}} code is {{2}}"
+            fallback_body = f"Your Check_N_Mate_Fee code is {short_url}"
+            
+            try:
+                fallback_msg = twilio_client.messages.create(
+                    body=fallback_body,
+                    from_=sender_number,
+                    to=recipient_number
+                )
+                return short_url, fallback_msg.sid, "Sandbox Template (Fallback)"
+            except Exception as fb_err:
+                raise Exception(f"[Template Fallback Failed] {str(fb_err)}")
+        else:
+            raise Exception(f"[Twilio API Error] {error_string}")
 
 # --- 5. UI DASHBOARD ---
 st.title("♟️ Check N Mate - Admin Portal")
@@ -260,7 +279,7 @@ with tab4:
     
     action_tabs = st.tabs(["➕ Enroll Student", "✏️ Update Profile", "❌ Remove Student"])
 
-    # CREATE 
+    # CREATE
     with action_tabs[0]:
         with st.form("add_student_form", clear_on_submit=True):
             c1, c2, c3 = st.columns(3)
