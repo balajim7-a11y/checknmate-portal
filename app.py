@@ -113,7 +113,12 @@ def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: floa
 # --- 5. UI DASHBOARD ---
 st.title("♟️ Check N Mate - Admin Portal")
 
-tab1, tab2, tab3 = st.tabs(["📊 Active Roster", "⚙️ Run Automations", "🗓️ Manage Due Dates"])
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📊 Active Roster", 
+    "⚙️ Run Automations", 
+    "🗓️ Manage Due Dates", 
+    "➕ Enroll Student"
+])
 
 # --- TAB 1: ACTIVE ROSTER ---
 with tab1:
@@ -134,7 +139,7 @@ with tab1:
 # --- TAB 2: BATCH AUTOMATIONS ---
 with tab2:
     st.header("Automated Messaging Engine")
-    st.caption("Executes the notification rules against current student due dates.")
+    st.caption("Executes notification rules against current student due dates.")
     
     if st.button("🚀 Execute Daily Notification Batch", type="primary"):
         with st.spinner("Processing pending payments..."):
@@ -243,3 +248,51 @@ with tab3:
                     st.cache_data.clear()
                 except Exception as e:
                     st.error(f"Bulk update failed: {e}")
+
+# --- TAB 4: ENROLL NEW STUDENT ---
+with tab4:
+    st.header("➕ Enroll New Student")
+    st.caption("Add a new student directly into the PostgreSQL database.")
+    
+    with st.form("add_student_form"):
+        col_left, col_right = st.columns(2)
+        
+        with col_left:
+            new_name = st.text_input("Student Name", placeholder="e.g., Rahul Sharma")
+            new_phone = st.text_input("Parent Phone Number", placeholder="e.g., +919019011331")
+            new_amount = st.number_input("Fee Amount (₹)", min_value=100.0, value=1200.0, step=100.0)
+            
+        with col_right:
+            new_due_date = st.date_input("First Due Date")
+            new_status = st.selectbox("Initial Payment Status", ["Pending", "Paid"])
+            
+        submit_new = st.form_submit_button("✅ Add Student to Database")
+        
+        if submit_new:
+            if not new_name.strip() or not new_phone.strip():
+                st.warning("⚠️ Student Name and Parent Phone are required.")
+            elif not new_phone.startswith("+"):
+                st.warning("⚠️ Phone number must include the international country code (e.g., +91...)")
+            else:
+                try:
+                    with conn.session as session:
+                        session.execute(
+                            text("""
+                                INSERT INTO Students 
+                                (student_name, parent_phone, fee_amount, due_date, payment_status) 
+                                VALUES (:name, :phone, :amount, :due_date, :status)
+                            """),
+                            {
+                                "name": new_name.strip(), 
+                                "phone": new_phone.strip(), 
+                                "amount": new_amount, 
+                                "due_date": new_due_date, 
+                                "status": new_status
+                            }
+                        )
+                        session.commit()
+                    
+                    st.success(f"🎉 Successfully enrolled **{new_name}**!")
+                    st.cache_data.clear()
+                except Exception as e:
+                    st.error(f"Failed to add student to database: {e}")
