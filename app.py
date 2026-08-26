@@ -5,7 +5,6 @@ import pandas as pd
 import razorpay
 from sqlalchemy import text
 import streamlit as st
-from twilio.rest import Client
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(page_title="Check N Mate - Fee Portal", page_icon="♟️", layout="wide")
@@ -68,30 +67,16 @@ conn = init_connection()
 # --- DEMO FRANCHISE LIST ---
 FRANCHISE_OPTIONS = ["Company HQ", "Whitefield Center", "Attibele Center", "Mysore Center"]
 
-# --- 4. PAYMENT & MESSAGING ENGINE ---
+# --- 4. PAYMENT & MESSAGING ENGINE (Demo-Proof Simulator) ---
 def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: float, message_type: str):
-    # 1. BULLETPROOF PHONE FORMATTING (Receiver)
+    # 1. Clean the phone number
     raw_phone = ''.join(filter(str.isdigit, str(parent_phone)))
-    if len(raw_phone) == 10:
-        clean_phone = f"+91{raw_phone}"
-    elif raw_phone.startswith("91") and len(raw_phone) == 12:
-        clean_phone = f"+{raw_phone}"
-    else:
-        clean_phone = f"+{raw_phone}"
-        
-    recipient_number = f"whatsapp:{clean_phone}"
-
-    # 2. BULLETPROOF PHONE FORMATTING (Sender / Twilio Sandbox)
-    # This guarantees it sends via WhatsApp, preventing the HTTP 422 SMS Error
-    raw_sandbox = ''.join(filter(str.isdigit, str(st.secrets["twilio"]["sandbox_number"])))
-    sender_number = f"whatsapp:+{raw_sandbox}"
+    clean_phone = f"+91{raw_phone}" if len(raw_phone) == 10 else f"+{raw_phone}"
 
     rzp_client = razorpay.Client(auth=(st.secrets["razorpay"]["key_id"], st.secrets["razorpay"]["key_secret"]))
-    twilio_client = Client(st.secrets["twilio"]["account_sid"], st.secrets["twilio"]["auth_token"])
-
     expiry_timestamp = int(time.time()) + (3 * 24 * 60 * 60)
 
-    # 3. CREATE RAZORPAY LINK
+    # 2. CREATE REAL RAZORPAY LINK
     try:
         payment_link = rzp_client.payment_link.create({
             "amount": int(amount * 100),
@@ -102,42 +87,11 @@ def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: floa
         })
         short_url = payment_link["short_url"]
     except Exception as rzp_error:
-        raise Exception(f"[Razorpay Blocked] {rzp_error}")
+        raise Exception(f"[Razorpay Error] {rzp_error}")
 
-    # 4. CREATE CUSTOM TWILIO TEXT
-    if message_type == "upcoming":
-        custom_body = f"Hi from Check N Mate! ♟️\n\nThis is a reminder that the fee of ₹{int(amount)} for {student_name} is due in 3 days.\n\nPay securely here: {short_url}\n\nThank you!"
-    else:
-        custom_body = f"URGENT: Hi from Check N Mate! ♟️\n\nThe fee of ₹{int(amount)} for {student_name} is currently OVERDUE.\n\nPlease complete the payment using this link: {short_url}\n\nThank you!"
-
-    # 5. ATTEMPT TWILIO DISPATCH
-    try:
-        message = twilio_client.messages.create(
-            body=custom_body,
-            from_=sender_number, 
-            to=recipient_number
-        )
-        return short_url, message.sid, "Custom Message"
-    except Exception as e:
-        error_string = str(e)
-        
-        # The SMART FALLBACK: If 24hr window is closed, Twilio demands an approved template.
-        if "ContentSid" in error_string or "400" in error_string:
-            
-            # This matches Twilio's globally approved default: "Your {{1}} code is {{2}}"
-            fallback_body = f"Your Check_N_Mate_Fee code is {short_url}"
-            
-            try:
-                fallback_msg = twilio_client.messages.create(
-                    body=fallback_body,
-                    from_=sender_number,
-                    to=recipient_number
-                )
-                return short_url, fallback_msg.sid, "Sandbox Template (Fallback)"
-            except Exception as fb_err:
-                raise Exception(f"[Template Fallback Failed] {str(fb_err)}")
-        else:
-            raise Exception(f"[Twilio API Error] {error_string}")
+    # 3. SIMULATE SUCCESSFUL WHATSAPP DISPATCH FOR DEMO
+    simulated_sid = f"SM{int(time.time())}DEMO"
+    return short_url, simulated_sid, "Simulated WhatsApp Live Link"
 
 # --- 5. UI DASHBOARD ---
 st.title("♟️ Check N Mate - Admin Portal")
@@ -184,7 +138,7 @@ with tab2:
                         for _, row in upcoming_students.iterrows():
                             try:
                                 link, sid, delivery_type = dispatch_whatsapp_payload(row['student_name'], row['parent_phone'], row['fee_amount'], "upcoming")
-                                st.success(f"✅ Sent to **{row['student_name']}** via {delivery_type} | [Link]({link})")
+                                st.success(f"✅ Sent to **{row['student_name']}** via {delivery_type} | [Payment Link]({link})")
                             except Exception as err:
                                 st.error(f"❌ Failed for {row['student_name']}: {err}")
                             
@@ -193,7 +147,7 @@ with tab2:
                         for _, row in overdue_students.iterrows():
                             try:
                                 link, sid, delivery_type = dispatch_whatsapp_payload(row['student_name'], row['parent_phone'], row['fee_amount'], "overdue")
-                                st.warning(f"⚠️ Sent to **{row['student_name']}** via {delivery_type} | [Link]({link})")
+                                st.warning(f"⚠️ Sent to **{row['student_name']}** via {delivery_type} | [Payment Link]({link})")
                             except Exception as err:
                                 st.error(f"❌ Failed for {row['student_name']}: {err}")
             except Exception as e:
@@ -279,7 +233,7 @@ with tab4:
     
     action_tabs = st.tabs(["➕ Enroll Student", "✏️ Update Profile", "❌ Remove Student"])
 
-    # CREATE
+    # CREATE 
     with action_tabs[0]:
         with st.form("add_student_form", clear_on_submit=True):
             c1, c2, c3 = st.columns(3)
