@@ -70,6 +70,11 @@ FRANCHISE_OPTIONS = ["Company HQ", "Whitefield Center", "Attibele Center", "Myso
 
 # --- 4. PAYMENT & MESSAGING ENGINE ---
 def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: float, message_type: str):
+    # Ensure phone number is in strict E.164 format for Twilio (must include '+')
+    clean_phone = parent_phone.strip()
+    if not clean_phone.startswith("+"):
+        clean_phone = "+" + clean_phone
+        
     rzp_client = razorpay.Client(auth=(st.secrets["razorpay"]["key_id"], st.secrets["razorpay"]["key_secret"]))
     twilio_client = Client(st.secrets["twilio"]["account_sid"], st.secrets["twilio"]["auth_token"])
 
@@ -82,7 +87,7 @@ def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: floa
             "currency": "INR",
             "expire_by": expiry_timestamp,
             "description": f"Fee payment for {student_name}",
-            "customer": {"name": student_name, "contact": parent_phone}
+            "customer": {"name": student_name, "contact": clean_phone}
         })
         short_url = payment_link["short_url"]
     except Exception as rzp_error:
@@ -96,32 +101,16 @@ def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: floa
 
     # 3. ATTEMPT TWILIO DISPATCH
     try:
+        # Since the parent's phone joined the Sandbox, the 24-hour window is OPEN!
+        # Freeform text is completely allowed, so we send the custom body directly.
         message = twilio_client.messages.create(
             body=custom_body,
             from_=st.secrets["twilio"]["sandbox_number"],
-            to=f"whatsapp:{parent_phone}"
+            to=f"whatsapp:{clean_phone}"
         )
         return short_url, message.sid, "Custom Message"
     except Exception as e:
-        error_string = str(e)
-        
-        # If Twilio rejects the custom text, attempt the strictest exact sandbox template
-        if "400" in error_string or "parameters" in error_string:
-            # Matches Twilio's strict Sandbox template: "Your {{1}} code is {{2}}"
-            fallback_body = f"Your fee code is {short_url}"
-            
-            try:
-                message = twilio_client.messages.create(
-                    body=fallback_body,
-                    from_=st.secrets["twilio"]["sandbox_number"],
-                    to=f"whatsapp:{parent_phone}"
-                )
-                return short_url, message.sid, "Sandbox Template (Fallback)"
-            
-            except Exception as fallback_error:
-                raise Exception(f"[Twilio Sandbox Failed] {fallback_error}")
-        else:
-            raise Exception(f"[Twilio Error] {error_string}")
+        raise Exception(f"[Twilio Error] {str(e)}")
 
 # --- 5. UI DASHBOARD ---
 st.title("♟️ Check N Mate - Admin Portal")
@@ -263,7 +252,7 @@ with tab4:
     
     action_tabs = st.tabs(["➕ Enroll Student", "✏️ Update Profile", "❌ Remove Student"])
 
-    # CREATE (With Duplicate Prevention & Auto-Clear)
+    # CREATE
     with action_tabs[0]:
         with st.form("add_student_form", clear_on_submit=True):
             c1, c2, c3 = st.columns(3)
@@ -283,14 +272,12 @@ with tab4:
                 else:
                     try:
                         with conn.session as session:
-                            # 1. Check for duplicates
                             check_query = text("SELECT COUNT(*) FROM Students WHERE student_name = :name AND parent_phone = :phone")
                             duplicate_count = session.execute(check_query, {"name": new_name, "phone": new_phone}).scalar()
                             
                             if duplicate_count > 0:
                                 st.error(f"⚠️ A student named **{new_name}** with the phone number **{new_phone}** is already enrolled!")
                             else:
-                                # 2. Insert new record
                                 session.execute(
                                     text("INSERT INTO Students (student_name, parent_phone, fee_amount, due_date, payment_status, franchise_name, last_updated_by) VALUES (:name, :phone, :amt, :date, :status, :franchise, :user)"),
                                     {"name": new_name, "phone": new_phone, "amt": new_amount, "date": new_due_date, "status": new_status, "franchise": new_franchise, "user": st.session_state["username"]}
