@@ -70,10 +70,15 @@ FRANCHISE_OPTIONS = ["Company HQ", "Whitefield Center", "Attibele Center", "Myso
 
 # --- 4. PAYMENT & MESSAGING ENGINE ---
 def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: float, message_type: str):
-    # 1. Clean the destination phone number
-    clean_phone = parent_phone.strip()
-    if not clean_phone.startswith("+"):
-        clean_phone = "+" + clean_phone
+    # 1. SMART PHONE FORMATTER (Strips spaces/dashes and ensures +91)
+    raw_phone = ''.join(filter(str.isdigit, str(parent_phone)))
+    
+    if len(raw_phone) == 10:
+        clean_phone = f"+91{raw_phone}"
+    elif len(raw_phone) > 10:
+        clean_phone = f"+{raw_phone}"
+    else:
+        raise Exception("Phone number is too short to be valid.")
         
     # 2. Guarantee the sender number has the 'whatsapp:' prefix
     sender_number = st.secrets["twilio"]["sandbox_number"].strip()
@@ -108,12 +113,12 @@ def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: floa
     try:
         message = twilio_client.messages.create(
             body=custom_body,
-            from_=sender_number, # Uses the mathematically guaranteed format
+            from_=sender_number, 
             to=f"whatsapp:{clean_phone}"
         )
         return short_url, message.sid, "Custom Message"
     except Exception as e:
-        raise Exception(f"[Twilio Error] {str(e)}")
+        raise Exception(f"HTTP Error: {str(e)}")
 
 # --- 5. UI DASHBOARD ---
 st.title("♟️ Check N Mate - Admin Portal")
@@ -255,13 +260,13 @@ with tab4:
     
     action_tabs = st.tabs(["➕ Enroll Student", "✏️ Update Profile", "❌ Remove Student"])
 
-    # CREATE (With Duplicate Prevention & Auto-Clear)
+    # CREATE 
     with action_tabs[0]:
         with st.form("add_student_form", clear_on_submit=True):
             c1, c2, c3 = st.columns(3)
             with c1:
                 new_name = st.text_input("Student Name")
-                new_phone = st.text_input("Parent Phone (+91...)")
+                new_phone = st.text_input("Parent Phone (10 digits)")
             with c2:
                 new_amount = st.number_input("Fee (₹)", min_value=100.0, value=1200.0)
                 new_due_date = st.date_input("First Due Date")
@@ -275,14 +280,12 @@ with tab4:
                 else:
                     try:
                         with conn.session as session:
-                            # 1. Check for duplicates
                             check_query = text("SELECT COUNT(*) FROM Students WHERE student_name = :name AND parent_phone = :phone")
                             duplicate_count = session.execute(check_query, {"name": new_name, "phone": new_phone}).scalar()
                             
                             if duplicate_count > 0:
                                 st.error(f"⚠️ A student named **{new_name}** with the phone number **{new_phone}** is already enrolled!")
                             else:
-                                # 2. Insert new record
                                 session.execute(
                                     text("INSERT INTO Students (student_name, parent_phone, fee_amount, due_date, payment_status, franchise_name, last_updated_by) VALUES (:name, :phone, :amt, :date, :status, :franchise, :user)"),
                                     {"name": new_name, "phone": new_phone, "amt": new_amount, "date": new_due_date, "status": new_status, "franchise": new_franchise, "user": st.session_state["username"]}
