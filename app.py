@@ -75,22 +75,26 @@ def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: floa
 
     expiry_timestamp = int(time.time()) + (3 * 24 * 60 * 60)
 
-    payment_link = rzp_client.payment_link.create({
-        "amount": int(amount * 100),
-        "currency": "INR",
-        "expire_by": expiry_timestamp,
-        "description": f"Fee payment for {student_name}",
-        "customer": {"name": student_name, "contact": parent_phone},
-        "notify": {"sms": False, "email": False}
-    })
-    short_url = payment_link["short_url"]
+    # 1. CREATE RAZORPAY LINK
+    try:
+        payment_link = rzp_client.payment_link.create({
+            "amount": int(amount * 100),
+            "currency": "INR",
+            "expire_by": expiry_timestamp,
+            "description": f"Fee payment for {student_name}",
+            "customer": {"name": student_name, "contact": parent_phone}
+        })
+        short_url = payment_link["short_url"]
+    except Exception as rzp_error:
+        raise Exception(f"[Razorpay Blocked] {rzp_error}")
 
+    # 2. CREATE CUSTOM TWILIO TEXT
     if message_type == "upcoming":
         custom_body = f"Hi from Check N Mate! ♟️\n\nThis is a reminder that the fee of ₹{int(amount)} for {student_name} is due in 3 days.\n\nPay securely here: {short_url}\n\nThank you!"
     else:
         custom_body = f"URGENT: Hi from Check N Mate! ♟️\n\nThe fee of ₹{int(amount)} for {student_name} is currently OVERDUE.\n\nPlease complete the payment using this link: {short_url}\n\nThank you!"
 
-    # 3. Attempt Delivery with Template Fallback (Free Trial Fix applied)
+    # 3. ATTEMPT TWILIO DISPATCH
     try:
         message = twilio_client.messages.create(
             body=custom_body,
@@ -99,22 +103,25 @@ def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: floa
         )
         return short_url, message.sid, "Custom Message"
     except Exception as e:
-        # If outside the 24-hour window, the custom message fails.
-        if "400" in str(e) or "Content" in str(e):
+        error_string = str(e)
+        
+        # If Twilio rejects the custom text, attempt the strictest exact sandbox template
+        if "400" in error_string or "parameters" in error_string:
+            # Matches Twilio's strict Sandbox template: "Your {{1}} code is {{2}}"
+            fallback_body = f"Your fee code is {short_url}"
             
-            # We use a string that perfectly matches Twilio's Sandbox Template: "Your {{1}} code is {{2}}"
-            status_label = f"{student_name} [{message_type.upper()} FEE]"
-            fallback_body = f"Your {status_label} code is {short_url}"
+            try:
+                message = twilio_client.messages.create(
+                    body=fallback_body,
+                    from_=st.secrets["twilio"]["sandbox_number"],
+                    to=f"whatsapp:{parent_phone}"
+                )
+                return short_url, message.sid, "Sandbox Template (Fallback)"
             
-            # Send as a standard string to bypass the Trial Account 'content_sid' restriction
-            message = twilio_client.messages.create(
-                body=fallback_body,
-                from_=st.secrets["twilio"]["sandbox_number"],
-                to=f"whatsapp:{parent_phone}"
-            )
-            return short_url, message.sid, "Sandbox Template (Fallback)"
+            except Exception as fallback_error:
+                raise Exception(f"[Twilio Sandbox Failed] {fallback_error}")
         else:
-            raise e
+            raise Exception(f"[Twilio Error] {error_string}")
 
 # --- 5. UI DASHBOARD ---
 st.title("♟️ Check N Mate - Admin Portal")
