@@ -1,10 +1,15 @@
 import json
+import logging
 import time
 from datetime import datetime, timedelta
+
 import pandas as pd
 import razorpay
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 import streamlit as st
+
+logger = logging.getLogger(__name__)
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(page_title="Check N Mate - Fee Portal", page_icon="♟️", layout="wide")
@@ -18,6 +23,14 @@ if "logged_in" not in st.session_state:
 def login_screen():
     st.title("🔒 Check N Mate - Secure Login")
     st.markdown("Please log in with your assigned Admin, Company, or Franchise credentials.")
+
+    try:
+        admin_password = st.secrets["admin_password"]
+        company_password = st.secrets["company_password"]
+        franchise_password = st.secrets["franchise_password"]
+    except (KeyError, FileNotFoundError, AttributeError):
+        st.error("Authentication secrets are not configured. Check `.streamlit/secrets.toml`.")
+        return
     
     with st.form("login_form"):
         username_input = st.text_input("Username")
@@ -25,17 +38,17 @@ def login_screen():
         submit_login = st.form_submit_button("Login")
         
         if submit_login:
-            if username_input.lower() == "superadmin" and password_input == st.secrets["admin_password"]:
+            if username_input.lower() == "superadmin" and password_input == admin_password:
                 st.session_state["logged_in"] = True
                 st.session_state["username"] = "superadmin"
                 st.session_state["role"] = "Admin"
                 st.rerun()
-            elif username_input.lower() == "company" and password_input == st.secrets["company_password"]:
+            elif username_input.lower() == "company" and password_input == company_password:
                 st.session_state["logged_in"] = True
                 st.session_state["username"] = "company"
                 st.session_state["role"] = "Company"
                 st.rerun()
-            elif username_input.lower() == "franchise" and password_input == st.secrets["franchise_password"]:
+            elif username_input.lower() == "franchise" and password_input == franchise_password:
                 st.session_state["logged_in"] = True
                 st.session_state["username"] = "franchise"
                 st.session_state["role"] = "Franchise"
@@ -60,23 +73,45 @@ with st.sidebar:
 # --- 3. DATABASE CONNECTION ---
 @st.cache_resource
 def init_connection():
-    return st.connection("postgresql", type="sql")
+    try:
+        return st.connection("postgresql", type="sql")
+    except Exception as exc:
+        logger.exception("Failed to initialize database connection")
+        raise RuntimeError("Unable to connect to PostgreSQL. Verify database settings in secrets.") from exc
 
-conn = init_connection()
+try:
+    conn = init_connection()
+except RuntimeError as exc:
+    st.error(str(exc))
+    st.stop()
 
 # --- DEMO FRANCHISE LIST ---
 FRANCHISE_OPTIONS = ["Company HQ", "Whitefield Center", "Attibele Center", "Mysore Center"]
 
 # --- 4. PAYMENT & MESSAGING ENGINE (Demo-Proof Simulator) ---
 def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: float, message_type: str):
-    # 1. Clean the phone number
-    raw_phone = ''.join(filter(str.isdigit, str(parent_phone)))
+    if not student_name or not str(student_name).strip():
+        raise ValueError("Student name is required.")
+    if not parent_phone or not str(parent_phone).strip():
+        raise ValueError("Parent phone number is required.")
+    if amount <= 0:
+        raise ValueError("Fee amount must be greater than zero.")
+
+    raw_phone = "".join(filter(str.isdigit, str(parent_phone)))
+    if len(raw_phone) not in (10, 12, 13):
+        raise ValueError(f"Invalid parent phone number: {parent_phone}")
+
     clean_phone = f"+91{raw_phone}" if len(raw_phone) == 10 else f"+{raw_phone}"
 
-    rzp_client = razorpay.Client(auth=(st.secrets["razorpay"]["key_id"], st.secrets["razorpay"]["key_secret"]))
+    try:
+        razorpay_key_id = st.secrets["razorpay"]["key_id"]
+        razorpay_key_secret = st.secrets["razorpay"]["key_secret"]
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError("Razorpay credentials are not configured in secrets.") from exc
+
+    rzp_client = razorpay.Client(auth=(razorpay_key_id, razorpay_key_secret))
     expiry_timestamp = int(time.time()) + (3 * 24 * 60 * 60)
 
-    # 2. CREATE REAL RAZORPAY LINK
     try:
         payment_link = rzp_client.payment_link.create({
             "amount": int(amount * 100),
@@ -86,10 +121,11 @@ def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: floa
             "customer": {"name": student_name, "contact": clean_phone}
         })
         short_url = payment_link["short_url"]
+    except (KeyError, TypeError) as exc:
+        raise RuntimeError("Razorpay returned an unexpected response.") from exc
     except Exception as rzp_error:
-        raise Exception(f"[Razorpay Error] {rzp_error}")
+        raise RuntimeError(f"Razorpay payment link creation failed: {rzp_error}") from rzp_error
 
-    # 3. SIMULATE SUCCESSFUL WHATSAPP DISPATCH FOR DEMO
     simulated_sid = f"SM{int(time.time())}DEMO"
     return short_url, simulated_sid, "Simulated WhatsApp Live Link"
 
@@ -114,8 +150,12 @@ with tab1:
     try:
         df = conn.query("SELECT id, student_name, parent_phone, fee_amount, due_date, payment_status, franchise_name, last_updated_by FROM Students ORDER BY due_date ASC;", ttl="0m")
         st.dataframe(df, use_container_width=True, hide_index=True)
-    except Exception as e:
-        st.error(f"Database Error: {e}")
+    except SQLAlchemyError as exc:
+        logger.exception("Failed to load active roster")
+        st.error(f"Database error while loading roster: {exc}")
+    except Exception as exc:
+        logger.exception("Unexpected error while loading active roster")
+        st.error(f"Unable to load roster: {exc}")
 
 # --- TAB 2: BATCH AUTOMATIONS ---
 with tab2:
@@ -139,7 +179,10 @@ with tab2:
                             try:
                                 link, sid, delivery_type = dispatch_whatsapp_payload(row['student_name'], row['parent_phone'], row['fee_amount'], "upcoming")
                                 st.success(f"✅ Sent to **{row['student_name']}** via {delivery_type} | [Payment Link]({link})")
+                            except (ValueError, RuntimeError) as err:
+                                st.error(f"❌ Failed for {row['student_name']}: {err}")
                             except Exception as err:
+                                logger.exception("Failed to send upcoming reminder for %s", row["student_name"])
                                 st.error(f"❌ Failed for {row['student_name']}: {err}")
                             
                     if not overdue_students.empty:
@@ -148,10 +191,17 @@ with tab2:
                             try:
                                 link, sid, delivery_type = dispatch_whatsapp_payload(row['student_name'], row['parent_phone'], row['fee_amount'], "overdue")
                                 st.warning(f"⚠️ Sent to **{row['student_name']}** via {delivery_type} | [Payment Link]({link})")
-                            except Exception as err:
+                            except (ValueError, RuntimeError) as err:
                                 st.error(f"❌ Failed for {row['student_name']}: {err}")
-            except Exception as e:
-                st.error(f"Database batch operation failed: {e}")
+                            except Exception as err:
+                                logger.exception("Failed to send overdue notice for %s", row["student_name"])
+                                st.error(f"❌ Failed for {row['student_name']}: {err}")
+            except SQLAlchemyError as exc:
+                logger.exception("Database batch operation failed")
+                st.error(f"Database batch operation failed: {exc}")
+            except Exception as exc:
+                logger.exception("Unexpected batch automation failure")
+                st.error(f"Batch automation failed: {exc}")
 
 # --- TAB 3: MANAGE DUE DATES ---
 with tab3:
@@ -177,19 +227,30 @@ with tab3:
                     submit_single = st.form_submit_button("Update Student")
                     
                     if submit_single:
-                        student_id = int(student_map[selected_student])
-                        with conn.session as session:
-                            session.execute(
-                                text("UPDATE Students SET due_date = :due_date, last_updated_by = :user WHERE id = :id"),
-                                {"due_date": new_due_date, "user": st.session_state["username"], "id": student_id}
-                            )
-                            session.commit()
-                        st.success(f"Updated {selected_student}'s due date to {new_due_date}!")
-                        st.cache_data.clear()
+                        try:
+                            student_id = int(student_map[selected_student])
+                            with conn.session as session:
+                                session.execute(
+                                    text("UPDATE Students SET due_date = :due_date, last_updated_by = :user WHERE id = :id"),
+                                    {"due_date": new_due_date, "user": st.session_state["username"], "id": student_id}
+                                )
+                                session.commit()
+                            st.success(f"Updated {selected_student}'s due date to {new_due_date}!")
+                            st.cache_data.clear()
+                        except SQLAlchemyError as exc:
+                            logger.exception("Failed to update due date for %s", selected_student)
+                            st.error(f"Database error while updating due date: {exc}")
+                        except Exception as exc:
+                            logger.exception("Unexpected error updating due date for %s", selected_student)
+                            st.error(f"Unable to update due date: {exc}")
             else:
                 st.warning("No records found.")
-        except Exception as e:
-            st.error(f"Error loading student list: {e}")
+        except SQLAlchemyError as exc:
+            logger.exception("Failed to load student list for due date management")
+            st.error(f"Database error while loading student list: {exc}")
+        except Exception as exc:
+            logger.exception("Unexpected error loading student list for due date management")
+            st.error(f"Error loading student list: {exc}")
 
     # Bulk Update Across the Board
     with col_bulk:
@@ -210,8 +271,12 @@ with tab3:
                         session.commit()
                     st.success(f"Successfully updated ALL records to {bulk_date}!")
                     st.cache_data.clear()
-                except Exception as e:
-                    st.error(f"Bulk update failed: {e}")
+                except SQLAlchemyError as exc:
+                    logger.exception("Bulk due date update failed")
+                    st.error(f"Database error during bulk update: {exc}")
+                except Exception as exc:
+                    logger.exception("Unexpected bulk due date update failure")
+                    st.error(f"Bulk update failed: {exc}")
 
 # --- TAB 4: STUDENT MANAGEMENT ---
 with tab4:
@@ -224,9 +289,14 @@ with tab4:
             st.dataframe(df_students, use_container_width=True, hide_index=True)
         else:
             st.info("No students found in the database.")
-    except Exception as e:
-        st.error(f"Error loading students: {e}")
-        df_students = pd.DataFrame() 
+    except SQLAlchemyError as exc:
+        logger.exception("Failed to load students for management tab")
+        st.error(f"Database error while loading students: {exc}")
+        df_students = pd.DataFrame()
+    except Exception as exc:
+        logger.exception("Unexpected error loading students for management tab")
+        st.error(f"Error loading students: {exc}")
+        df_students = pd.DataFrame()
 
     st.divider()
     st.subheader("Administrative Actions")
@@ -267,8 +337,12 @@ with tab4:
                                 st.success(f"Successfully added {new_name} to {new_franchise}!")
                                 st.cache_data.clear()
                                 
-                    except Exception as e:
-                        st.error(f"Error adding student: {e}")
+                    except SQLAlchemyError as exc:
+                        logger.exception("Failed to add student %s", new_name)
+                        st.error(f"Database error while adding student: {exc}")
+                    except Exception as exc:
+                        logger.exception("Unexpected error adding student %s", new_name)
+                        st.error(f"Error adding student: {exc}")
 
     # UPDATE
     with action_tabs[1]:
@@ -301,8 +375,12 @@ with tab4:
                             session.commit()
                         st.success(f"Updated {selected}'s profile!")
                         st.cache_data.clear()
-                    except Exception as e:
-                        st.error(f"Error updating student: {e}")
+                    except SQLAlchemyError as exc:
+                        logger.exception("Failed to update student %s", selected)
+                        st.error(f"Database error while updating student: {exc}")
+                    except Exception as exc:
+                        logger.exception("Unexpected error updating student %s", selected)
+                        st.error(f"Error updating student: {exc}")
         else:
             st.info("No records available to update.")
 
@@ -327,7 +405,11 @@ with tab4:
                         st.cache_data.clear()
                         time.sleep(1)
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"Error deleting student: {e}")
+                    except SQLAlchemyError as exc:
+                        logger.exception("Failed to delete student %s", del_selected)
+                        st.error(f"Database error while deleting student: {exc}")
+                    except Exception as exc:
+                        logger.exception("Unexpected error deleting student %s", del_selected)
+                        st.error(f"Error deleting student: {exc}")
             else:
                 st.info("No records available to delete.")
