@@ -1,5 +1,9 @@
 {
   "name": "Check N Mate Portal",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "user": "ubuntu",
   "install": "./.cursor/scripts/cloud-agent-install.sh",
   "start": "./.cursor/scripts/cloud-agent-start.sh",
   "ports": [
