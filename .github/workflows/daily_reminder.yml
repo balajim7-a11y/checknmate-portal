@@ -2,7 +2,6 @@ name: Fee Reminder Cron
 
 on:
   schedule:
-    # Runs every day at 3:30 AM UTC (9:00 AM IST) so the script can verify if today is the 2nd or 5th
     - cron: '30 3 * * *'
   workflow_dispatch:
 
@@ -22,12 +21,15 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install sqlalchemy psycopg2-binary razorpay pandas
+          pip install sqlalchemy psycopg2-binary razorpay pandas twilio
 
       - name: Run Automated Notification Script
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           RAZORPAY_KEY_ID: ${{ secrets.RAZORPAY_KEY_ID }}
           RAZORPAY_KEY_SECRET: ${{ secrets.RAZORPAY_KEY_SECRET }}
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_SANDBOX_NUMBER: ${{ secrets.TWILIO_SANDBOX_NUMBER }}
         run: |
           python cron_job.py
