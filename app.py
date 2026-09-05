@@ -30,7 +30,6 @@ def ensure_users_table():
         """))
         session.commit()
         
-        # Explicit Python-side check & upsert to avoid constraint mismatch errors
         default_users = [
             ("superadmin", "Admin123!", "Admin", "Company HQ"),
             ("company", "Company123!", "Company", "Company HQ"),
@@ -39,8 +38,9 @@ def ensure_users_table():
         
         for uname, pwd, role, franchise in default_users:
             pwd_hash = bcrypt.hashpw(pwd.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+            # Use SELECT 1 to avoid depending on specific primary key column names (id vs user_id)
             existing = session.execute(
-                text("SELECT id FROM Users WHERE username = :u"), {"u": uname}
+                text("SELECT 1 FROM Users WHERE username = :u"), {"u": uname}
             ).fetchone()
             
             if existing:
