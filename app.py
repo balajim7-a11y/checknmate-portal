@@ -10,7 +10,7 @@ import streamlit as st
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(page_title="Check N Mate - Fee Portal", page_icon="♟️", layout="wide")
 
-# --- 2. DATABASE CONNECTION & SAFE USER SYNC ---
+# --- 2. DATABASE CONNECTION & CLEAN USER SETUP ---
 @st.cache_resource
 def init_connection():
     return st.connection("postgresql", type="sql")
@@ -18,45 +18,36 @@ def init_connection():
 conn = init_connection()
 
 def ensure_users_table():
-    try:
-        with conn.session as session:
-            session.execute(text("""
-                CREATE TABLE IF NOT EXISTS Users (
-                    id SERIAL PRIMARY KEY,
-                    username VARCHAR(50) UNIQUE NOT NULL,
-                    password_hash VARCHAR(255) NOT NULL,
-                    role VARCHAR(20) NOT NULL,
-                    franchise_name VARCHAR(100) DEFAULT 'Company HQ'
-                );
-            """))
-            session.commit()
+    with conn.session as session:
+        session.execute(text("""
+            CREATE TABLE IF NOT EXISTS Users (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(50) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                role VARCHAR(20) NOT NULL,
+                franchise_name VARCHAR(100) DEFAULT 'Company HQ'
+            );
+        """))
+        session.commit()
+        
+        default_users = [
+            ("superadmin", "Admin123!", "Admin", "Company HQ"),
+            ("company", "Company123!", "Company", "Company HQ"),
+            ("franchise", "Franchise123!", "Franchise", "Whitefield Center")
+        ]
+        
+        for uname, pwd, role, franchise in default_users:
+            existing = session.execute(
+                text("SELECT 1 FROM Users WHERE username = :u"), {"u": uname}
+            ).fetchone()
             
-            default_users = [
-                ("superadmin", "Admin123!", "Admin", "Company HQ"),
-                ("company", "Company123!", "Company", "Company HQ"),
-                ("franchise", "Franchise123!", "Franchise", "Whitefield Center")
-            ]
-            
-            for uname, pwd, role, franchise in default_users:
+            if not existing:
                 pwd_hash = bcrypt.hashpw(pwd.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-                existing = session.execute(
-                    text("SELECT 1 FROM Users WHERE username = :u"), {"u": uname}
-                ).fetchone()
-                
-                if existing:
-                    session.execute(
-                        text("UPDATE Users SET password_hash = :h, role = :r, franchise_name = :f WHERE username = :u"),
-                        {"h": pwd_hash, "r": role, "f": franchise, "u": uname}
-                    )
-                else:
-                    session.execute(
-                        text("INSERT INTO Users (username, password_hash, role, franchise_name) VALUES (:u, :h, :r, :f)"),
-                        {"u": uname, "h": pwd_hash, "r": role, "f": franchise}
-                    )
-            session.commit()
-    except Exception as e:
-        # Gracefully handle any legacy schema mismatches so the app never crashes on boot
-        pass
+                session.execute(
+                    text("INSERT INTO Users (username, password_hash, role, franchise_name) VALUES (:u, :h, :r, :f)"),
+                    {"u": uname, "h": pwd_hash, "r": role, "f": franchise}
+                )
+        session.commit()
 
 ensure_users_table()
 
@@ -88,7 +79,7 @@ def login_screen():
                 try:
                     df_user = conn.query(
                         "SELECT username, password_hash, role, franchise_name FROM Users WHERE username = :uname;",
-                        params={"uname": username_input.lower()},
+                        params={"uname": username_input.strip().lower()},
                         ttl="0m"
                     )
                     
