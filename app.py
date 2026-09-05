@@ -9,39 +9,45 @@ import streamlit as st
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(page_title="Check N Mate - Fee Portal", page_icon="♟️", layout="wide")
 
-# --- 2. AUTHENTICATION & ROLE MANAGEMENT ---
+# --- 2. AUTHENTICATION & POLISHED LOGIN ---
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
     st.session_state["username"] = ""
     st.session_state["role"] = ""
 
 def login_screen():
-    st.title("🔒 Check N Mate - Secure Login")
-    st.markdown("Please log in with your assigned Admin, Company, or Franchise credentials.")
-    
-    with st.form("login_form"):
-        username_input = st.text_input("Username")
-        password_input = st.text_input("Password", type="password")
-        submit_login = st.form_submit_button("Login")
+    # Centered layout for professional first impression
+    _, col_center, _ = st.columns([1.2, 2, 1.2])
+    with col_center:
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        st.markdown("<h1 style='text-align: center;'>♟️ Check N Mate</h1>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; color: #666;'>Secure Fee Management & Operations Portal</p><br>", unsafe_allow_html=True)
         
-        if submit_login:
-            if username_input.lower() == "superadmin" and password_input == st.secrets["admin_password"]:
-                st.session_state["logged_in"] = True
-                st.session_state["username"] = "superadmin"
-                st.session_state["role"] = "Admin"
-                st.rerun()
-            elif username_input.lower() == "company" and password_input == st.secrets["company_password"]:
-                st.session_state["logged_in"] = True
-                st.session_state["username"] = "company"
-                st.session_state["role"] = "Company"
-                st.rerun()
-            elif username_input.lower() == "franchise" and password_input == st.secrets["franchise_password"]:
-                st.session_state["logged_in"] = True
-                st.session_state["username"] = "franchise"
-                st.session_state["role"] = "Franchise"
-                st.rerun()
-            else:
-                st.error("😕 Invalid username or password.")
+        with st.form("login_form"):
+            st.markdown("### 🔒 System Login")
+            username_input = st.text_input("Username")
+            password_input = st.text_input("Password", type="password")
+            st.markdown("<br>", unsafe_allow_html=True)
+            submit_login = st.form_submit_button("Sign In", use_container_width=True)
+            
+            if submit_login:
+                if username_input.lower() == "superadmin" and password_input == st.secrets["admin_password"]:
+                    st.session_state["logged_in"] = True
+                    st.session_state["username"] = "superadmin"
+                    st.session_state["role"] = "Admin"
+                    st.rerun()
+                elif username_input.lower() == "company" and password_input == st.secrets["company_password"]:
+                    st.session_state["logged_in"] = True
+                    st.session_state["username"] = "company"
+                    st.session_state["role"] = "Company"
+                    st.rerun()
+                elif username_input.lower() == "franchise" and password_input == st.secrets["franchise_password"]:
+                    st.session_state["logged_in"] = True
+                    st.session_state["username"] = "franchise"
+                    st.session_state["role"] = "Franchise"
+                    st.rerun()
+                else:
+                    st.error("😕 Invalid username or password.")
 
 if not st.session_state["logged_in"]:
     login_screen()
@@ -67,16 +73,14 @@ conn = init_connection()
 # --- DEMO FRANCHISE LIST ---
 FRANCHISE_OPTIONS = ["Company HQ", "Whitefield Center", "Attibele Center", "Mysore Center"]
 
-# --- 4. PAYMENT & MESSAGING ENGINE (Demo-Proof Simulator) ---
+# --- 4. PAYMENT & MESSAGING ENGINE (Simulator) ---
 def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: float, message_type: str):
-    # 1. Clean the phone number
     raw_phone = ''.join(filter(str.isdigit, str(parent_phone)))
     clean_phone = f"+91{raw_phone}" if len(raw_phone) == 10 else f"+{raw_phone}"
 
     rzp_client = razorpay.Client(auth=(st.secrets["razorpay"]["key_id"], st.secrets["razorpay"]["key_secret"]))
     expiry_timestamp = int(time.time()) + (3 * 24 * 60 * 60)
 
-    # 2. CREATE REAL RAZORPAY LINK
     try:
         payment_link = rzp_client.payment_link.create({
             "amount": int(amount * 100),
@@ -89,7 +93,6 @@ def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: floa
     except Exception as rzp_error:
         raise Exception(f"[Razorpay Error] {rzp_error}")
 
-    # 3. SIMULATE SUCCESSFUL WHATSAPP DISPATCH FOR DEMO
     simulated_sid = f"SM{int(time.time())}DEMO"
     return short_url, simulated_sid, "Simulated WhatsApp Live Link"
 
@@ -160,7 +163,6 @@ with tab3:
     
     col_single, col_bulk = st.columns(2)
     
-    # Single Student Update
     with col_single:
         st.subheader("👤 Individual Update")
         try:
@@ -191,7 +193,6 @@ with tab3:
         except Exception as e:
             st.error(f"Error loading student list: {e}")
 
-    # Bulk Update Across the Board
     with col_bulk:
         st.subheader("⚡ Bulk Update (Testing Engine)")
         st.info("💡 Set all records at once to test the automated rules in Tab 2.")
@@ -233,7 +234,6 @@ with tab4:
     
     action_tabs = st.tabs(["➕ Enroll Student", "✏️ Update Profile", "❌ Remove Student"])
 
-    # CREATE 
     with action_tabs[0]:
         with st.form("add_student_form", clear_on_submit=True):
             c1, c2, c3 = st.columns(3)
@@ -270,7 +270,6 @@ with tab4:
                     except Exception as e:
                         st.error(f"Error adding student: {e}")
 
-    # UPDATE
     with action_tabs[1]:
         if not df_students.empty:
             student_map = dict(zip(df_students['student_name'], df_students['id']))
@@ -306,7 +305,6 @@ with tab4:
         else:
             st.info("No records available to update.")
 
-    # DELETE
     with action_tabs[2]:
         if st.session_state["role"] == "Franchise":
             st.error("🚫 Access Denied: Franchise users cannot permanently delete records. Please contact Company Admin.")
