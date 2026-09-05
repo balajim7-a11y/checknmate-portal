@@ -10,12 +10,48 @@ import streamlit as st
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(page_title="Check N Mate - Fee Portal", page_icon="♟️", layout="wide")
 
-# --- 2. DATABASE CONNECTION ---
+# --- 2. DATABASE CONNECTION & AUTO-SYNC ---
 @st.cache_resource
 def init_connection():
     return st.connection("postgresql", type="sql")
 
 conn = init_connection()
+
+def ensure_users_table():
+    with conn.session as session:
+        session.execute(text("""
+            CREATE TABLE IF NOT EXISTS Users (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(50) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                role VARCHAR(20) NOT NULL,
+                franchise_name VARCHAR(100) DEFAULT 'Company HQ'
+            );
+        """))
+        session.commit()
+        
+        # Always sync valid bcrypt hashes for default accounts on startup
+        admin_hash = bcrypt.hashpw("Admin123!".encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        company_hash = bcrypt.hashpw("Company123!".encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        franchise_hash = bcrypt.hashpw("Franchise123!".encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        
+        session.execute(text("""
+            INSERT INTO Users (username, password_hash, role, franchise_name) VALUES
+            ('superadmin', :h1, 'Admin', 'Company HQ'),
+            ('company', :h2, 'Company', 'Company HQ'),
+            ('franchise', :h3, 'Franchise', 'Whitefield Center')
+            ON CONFLICT (username) DO UPDATE 
+            SET password_hash = EXCLUDED.password_hash, 
+                role = EXCLUDED.role, 
+                franchise_name = EXCLUDED.franchise_name;
+        """), {
+            "h1": admin_hash,
+            "h2": company_hash,
+            "h3": franchise_hash
+        })
+        session.commit()
+
+ensure_users_table()
 
 # --- DEMO FRANCHISE LIST ---
 FRANCHISE_OPTIONS = ["Company HQ", "Whitefield Center", "Attibele Center", "Mysore Center"]
@@ -112,7 +148,6 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "🧑‍🎓 Student Management"
 ])
 
-# Helper function to scope queries based on role
 def get_scoped_students_query():
     if st.session_state["role"] in ["Admin", "Company"]:
         return "SELECT id, student_name, parent_phone, fee_amount, due_date, payment_status, franchise_name, last_updated_by FROM Students ORDER BY due_date ASC;"
@@ -256,11 +291,7 @@ with tab4:
     with action_tabs[0]:
         with st.form("add_student_form", clear_on_submit=True):
             c1, c2, c3 = st.columns(3)
-            default_franchise_idx = 0
-            if st.session_state["role"] == "Franchise":
-                franchise_choices = [st.session_state["franchise_name"]]
-            else:
-                franchise_choices = FRANCHISE_OPTIONS
+            franchise_choices = [st.session_state["franchise_name"]] if st.session_state["role"] == "Franchise" else FRANCHISE_OPTIONS
 
             with c1:
                 new_name = st.text_input("Student Name")
