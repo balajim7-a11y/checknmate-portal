@@ -3,67 +3,14 @@ import time
 from datetime import datetime, timedelta
 import pandas as pd
 import razorpay
+import bcrypt
 from sqlalchemy import text
 import streamlit as st
 
 # --- 1. PAGE CONFIGURATION ---
 st.set_page_config(page_title="Check N Mate - Fee Portal", page_icon="♟️", layout="wide")
 
-# --- 2. AUTHENTICATION & POLISHED LOGIN ---
-if "logged_in" not in st.session_state:
-    st.session_state["logged_in"] = False
-    st.session_state["username"] = ""
-    st.session_state["role"] = ""
-
-def login_screen():
-    # Centered layout for professional first impression
-    _, col_center, _ = st.columns([1.2, 2, 1.2])
-    with col_center:
-        st.markdown("<br><br>", unsafe_allow_html=True)
-        st.markdown("<h1 style='text-align: center;'>♟️ Check N Mate</h1>", unsafe_allow_html=True)
-        st.markdown("<p style='text-align: center; color: #666;'>Secure Fee Management & Operations Portal</p><br>", unsafe_allow_html=True)
-        
-        with st.form("login_form"):
-            st.markdown("### 🔒 System Login")
-            username_input = st.text_input("Username")
-            password_input = st.text_input("Password", type="password")
-            st.markdown("<br>", unsafe_allow_html=True)
-            submit_login = st.form_submit_button("Sign In", use_container_width=True)
-            
-            if submit_login:
-                if username_input.lower() == "superadmin" and password_input == st.secrets["admin_password"]:
-                    st.session_state["logged_in"] = True
-                    st.session_state["username"] = "superadmin"
-                    st.session_state["role"] = "Admin"
-                    st.rerun()
-                elif username_input.lower() == "company" and password_input == st.secrets["company_password"]:
-                    st.session_state["logged_in"] = True
-                    st.session_state["username"] = "company"
-                    st.session_state["role"] = "Company"
-                    st.rerun()
-                elif username_input.lower() == "franchise" and password_input == st.secrets["franchise_password"]:
-                    st.session_state["logged_in"] = True
-                    st.session_state["username"] = "franchise"
-                    st.session_state["role"] = "Franchise"
-                    st.rerun()
-                else:
-                    st.error("😕 Invalid username or password.")
-
-if not st.session_state["logged_in"]:
-    login_screen()
-    st.stop() 
-
-# --- SIDEBAR: USER INFO & LOGOUT ---
-with st.sidebar:
-    st.markdown("### 👤 User Session")
-    st.info(f"**User:** {st.session_state['username'].capitalize()}\n\n**Role:** {st.session_state['role']}")
-    if st.button("🚪 Logout"):
-        st.session_state["logged_in"] = False
-        st.session_state["username"] = ""
-        st.session_state["role"] = ""
-        st.rerun()
-
-# --- 3. DATABASE CONNECTION ---
+# --- 2. DATABASE CONNECTION ---
 @st.cache_resource
 def init_connection():
     return st.connection("postgresql", type="sql")
@@ -72,6 +19,65 @@ conn = init_connection()
 
 # --- DEMO FRANCHISE LIST ---
 FRANCHISE_OPTIONS = ["Company HQ", "Whitefield Center", "Attibele Center", "Mysore Center"]
+
+# --- 3. DATABASE-BACKED AUTHENTICATION ---
+if "logged_in" not in st.session_state:
+    st.session_state["logged_in"] = False
+    st.session_state["username"] = ""
+    st.session_state["role"] = ""
+    st.session_state["franchise_name"] = ""
+
+def login_screen():
+    _, col_center, _ = st.columns([1.2, 2, 1.2])
+    with col_center:
+        st.markdown("<br><br>", unsafe_allow_html=True)
+        st.markdown("<h1 style='text-align: center;'>♟️ Check N Mate</h1>", unsafe_allow_html=True)
+        st.markdown("<p style='text-align: center; color: #666;'>Secure Fee Management & Operations Portal</p><br>", unsafe_allow_html=True)
+        
+        with st.form("login_form"):
+            st.markdown("### 🔒 Database Authentication")
+            username_input = st.text_input("Username")
+            password_input = st.text_input("Password", type="password")
+            st.markdown("<br>", unsafe_allow_html=True)
+            submit_login = st.form_submit_button("Sign In", use_container_width=True)
+            
+            if submit_login:
+                try:
+                    df_user = conn.query(
+                        "SELECT username, password_hash, role, franchise_name FROM Users WHERE username = :uname;",
+                        params={"uname": username_input.lower()},
+                        ttl="0m"
+                    )
+                    
+                    if not df_user.empty:
+                        stored_hash = df_user.iloc[0]["password_hash"]
+                        if bcrypt.checkpw(password_input.encode('utf-8'), stored_hash.encode('utf-8')):
+                            st.session_state["logged_in"] = True
+                            st.session_state["username"] = df_user.iloc[0]["username"]
+                            st.session_state["role"] = df_user.iloc[0]["role"]
+                            st.session_state["franchise_name"] = df_user.iloc[0]["franchise_name"]
+                            st.rerun()
+                        else:
+                            st.error("😕 Invalid username or password.")
+                    else:
+                        st.error("😕 Invalid username or password.")
+                except Exception as e:
+                    st.error(f"Authentication error: {e}")
+
+if not st.session_state["logged_in"]:
+    login_screen()
+    st.stop() 
+
+# --- SIDEBAR: USER INFO & LOGOUT ---
+with st.sidebar:
+    st.markdown("### 👤 User Session")
+    st.info(f"**User:** {st.session_state['username'].capitalize()}\n\n**Role:** {st.session_state['role']}\n\n**Center:** {st.session_state['franchise_name']}")
+    if st.button("🚪 Logout"):
+        st.session_state["logged_in"] = False
+        st.session_state["username"] = ""
+        st.session_state["role"] = ""
+        st.session_state["franchise_name"] = ""
+        st.rerun()
 
 # --- 4. PAYMENT & MESSAGING ENGINE (Simulator) ---
 def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: float, message_type: str):
@@ -96,7 +102,7 @@ def dispatch_whatsapp_payload(student_name: str, parent_phone: str, amount: floa
     simulated_sid = f"SM{int(time.time())}DEMO"
     return short_url, simulated_sid, "Simulated WhatsApp Live Link"
 
-# --- 5. UI DASHBOARD ---
+# --- 5. UI DASHBOARD & SCOPED QUERIES ---
 st.title("♟️ Check N Mate - Admin Portal")
 
 tab1, tab2, tab3, tab4 = st.tabs([
@@ -105,6 +111,13 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "🗓️ Manage Due Dates", 
     "🧑‍🎓 Student Management"
 ])
+
+# Helper function to scope queries based on role
+def get_scoped_students_query():
+    if st.session_state["role"] in ["Admin", "Company"]:
+        return "SELECT id, student_name, parent_phone, fee_amount, due_date, payment_status, franchise_name, last_updated_by FROM Students ORDER BY due_date ASC;"
+    else:
+        return f"SELECT id, student_name, parent_phone, fee_amount, due_date, payment_status, franchise_name, last_updated_by FROM Students WHERE franchise_name = '{st.session_state['franchise_name']}' ORDER BY due_date ASC;"
 
 # --- TAB 1: ACTIVE ROSTER ---
 with tab1:
@@ -115,7 +128,8 @@ with tab1:
             st.cache_data.clear()
         
     try:
-        df = conn.query("SELECT id, student_name, parent_phone, fee_amount, due_date, payment_status, franchise_name, last_updated_by FROM Students ORDER BY due_date ASC;", ttl="0m")
+        query = get_scoped_students_query()
+        df = conn.query(query, ttl="0m")
         st.dataframe(df, use_container_width=True, hide_index=True)
     except Exception as e:
         st.error(f"Database Error: {e}")
@@ -126,7 +140,8 @@ with tab2:
     if st.button("🚀 Execute Daily Notification Batch", type="primary"):
         with st.spinner("Processing pending payments..."):
             try:
-                df = conn.query("SELECT * FROM Students WHERE payment_status = 'Pending';", ttl="0m")
+                base_q = get_scoped_students_query().replace("ORDER BY due_date ASC;", "AND payment_status = 'Pending' ORDER BY due_date ASC;")
+                df = conn.query(base_q, ttl="0m")
                 if df.empty:
                     st.info("No pending payments found.")
                 else:
@@ -159,14 +174,14 @@ with tab2:
 # --- TAB 3: MANAGE DUE DATES ---
 with tab3:
     st.header("🗓️ Manage Due Dates")
-    st.caption("Update individual deadlines or use bulk update across all records for live testing.")
+    st.caption("Update individual deadlines or use bulk update across records.")
     
     col_single, col_bulk = st.columns(2)
     
     with col_single:
         st.subheader("👤 Individual Update")
         try:
-            df_students = conn.query("SELECT id, student_name, due_date FROM Students ORDER BY student_name;", ttl="0m")
+            df_students = conn.query(get_scoped_students_query(), ttl="0m")
             if not df_students.empty:
                 with st.form("single_update_form"):
                     student_map = dict(zip(df_students['student_name'], df_students['id']))
@@ -194,22 +209,26 @@ with tab3:
             st.error(f"Error loading student list: {e}")
 
     with col_bulk:
-        st.subheader("⚡ Bulk Update (Testing Engine)")
-        st.info("💡 Set all records at once to test the automated rules in Tab 2.")
-        
+        st.subheader("⚡ Bulk Update")
         with st.form("bulk_update_form"):
-            bulk_date = st.date_input("Set Date for ALL Records", key="bulk_date_input")
-            submit_bulk = st.form_submit_button("Apply to All Students")
+            bulk_date = st.date_input("Set Date for Records", key="bulk_date_input")
+            submit_bulk = st.form_submit_button("Apply Update")
             
             if submit_bulk:
                 try:
                     with conn.session as session:
-                        session.execute(
-                            text("UPDATE Students SET due_date = :bulk_date, last_updated_by = :user"),
-                            {"bulk_date": bulk_date, "user": st.session_state["username"]}
-                        )
+                        if st.session_state["role"] in ["Admin", "Company"]:
+                            session.execute(
+                                text("UPDATE Students SET due_date = :bulk_date, last_updated_by = :user"),
+                                {"bulk_date": bulk_date, "user": st.session_state["username"]}
+                            )
+                        else:
+                            session.execute(
+                                text("UPDATE Students SET due_date = :bulk_date, last_updated_by = :user WHERE franchise_name = :franchise"),
+                                {"bulk_date": bulk_date, "user": st.session_state["username"], "franchise": st.session_state["franchise_name"]}
+                            )
                         session.commit()
-                    st.success(f"Successfully updated ALL records to {bulk_date}!")
+                    st.success(f"Successfully updated records to {bulk_date}!")
                     st.cache_data.clear()
                 except Exception as e:
                     st.error(f"Bulk update failed: {e}")
@@ -220,11 +239,11 @@ with tab4:
     
     st.subheader("Current Database View")
     try:
-        df_students = conn.query("SELECT id, student_name, parent_phone, fee_amount, due_date, payment_status, franchise_name, last_updated_by FROM Students ORDER BY student_name;", ttl="0m")
+        df_students = conn.query(get_scoped_students_query(), ttl="0m")
         if not df_students.empty:
             st.dataframe(df_students, use_container_width=True, hide_index=True)
         else:
-            st.info("No students found in the database.")
+            st.info("No students found.")
     except Exception as e:
         st.error(f"Error loading students: {e}")
         df_students = pd.DataFrame() 
@@ -237,6 +256,12 @@ with tab4:
     with action_tabs[0]:
         with st.form("add_student_form", clear_on_submit=True):
             c1, c2, c3 = st.columns(3)
+            default_franchise_idx = 0
+            if st.session_state["role"] == "Franchise":
+                franchise_choices = [st.session_state["franchise_name"]]
+            else:
+                franchise_choices = FRANCHISE_OPTIONS
+
             with c1:
                 new_name = st.text_input("Student Name")
                 new_phone = st.text_input("Parent Phone (10 digits)")
@@ -245,7 +270,7 @@ with tab4:
                 new_due_date = st.date_input("First Due Date")
             with c3:
                 new_status = st.selectbox("Status", ["Pending", "Paid"])
-                new_franchise = st.selectbox("Assign to Franchise", FRANCHISE_OPTIONS)
+                new_franchise = st.selectbox("Assign to Franchise", franchise_choices)
                 
             if st.form_submit_button("Add to Database"):
                 if not new_name or not new_phone:
@@ -277,7 +302,8 @@ with tab4:
             
             curr_data = df_students[df_students['student_name'] == selected].iloc[0]
             curr_franchise = curr_data.get('franchise_name', 'Company HQ')
-            franchise_idx = FRANCHISE_OPTIONS.index(curr_franchise) if curr_franchise in FRANCHISE_OPTIONS else 0
+            franchise_choices = FRANCHISE_OPTIONS if st.session_state["role"] in ["Admin", "Company"] else [st.session_state["franchise_name"]]
+            franchise_idx = franchise_choices.index(curr_franchise) if curr_franchise in franchise_choices else 0
             
             with st.form("update_student_form"):
                 c1, c2, c3 = st.columns(3)
@@ -288,7 +314,7 @@ with tab4:
                     upd_date = st.date_input("Due Date", value=pd.to_datetime(curr_data['due_date']))
                     upd_status = st.selectbox("Status", ["Pending", "Paid"], index=0 if curr_data['payment_status'] == "Pending" else 1)
                 with c3:
-                    upd_franchise = st.selectbox("Franchise", FRANCHISE_OPTIONS, index=franchise_idx)
+                    upd_franchise = st.selectbox("Franchise", franchise_choices, index=franchise_idx)
                 
                 if st.form_submit_button("Save Changes"):
                     try:
@@ -307,13 +333,13 @@ with tab4:
 
     with action_tabs[2]:
         if st.session_state["role"] == "Franchise":
-            st.error("🚫 Access Denied: Franchise users cannot permanently delete records. Please contact Company Admin.")
+            st.error("🚫 Access Denied: Franchise users cannot permanently delete records.")
         else:
             if not df_students.empty:
                 student_map = dict(zip(df_students['student_name'], df_students['id']))
                 del_selected = st.selectbox("Select Student to Permanently Delete", list(student_map.keys()))
                 
-                st.warning(f"You are about to permanently remove **{del_selected}** from the database. This action cannot be undone.")
+                st.warning(f"You are about to permanently remove **{del_selected}** from the database.")
                 confirm_delete = st.checkbox("I confirm that I want to delete this record.")
                 
                 if st.button("⚠️ Permanently Delete Record", type="primary", disabled=not confirm_delete):
