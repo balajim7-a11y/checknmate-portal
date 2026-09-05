@@ -1,4 +1,3 @@
-os.environ = dict(os.environ)  # safe initialization
 import os
 import time
 from datetime import datetime
