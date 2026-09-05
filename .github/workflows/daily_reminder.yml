@@ -1,10 +1,10 @@
-name: Daily Fee Reminder Cron
+name: Fee Reminder Cron
 
 on:
   schedule:
-    # Runs every day at 3:30 AM UTC (which is 9:00 AM IST)
+    # Runs every day at 3:30 AM UTC (9:00 AM IST) so the script can verify if today is the 2nd or 5th
     - cron: '30 3 * * *'
-  workflow_dispatch: # Allows manual trigger from GitHub UI
+  workflow_dispatch:
 
 jobs:
   run-batch:
