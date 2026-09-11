@@ -29,18 +29,18 @@ def ensure_users_table():
             );
         """))
         session.commit()
-        
+
         default_users = [
             ("superadmin", "Admin123!", "Admin", "Company HQ"),
             ("company", "Company123!", "Company", "Company HQ"),
             ("franchise", "Franchise123!", "Franchise", "Whitefield Center")
         ]
-        
+
         for uname, pwd, role, franchise in default_users:
             existing = session.execute(
                 text("SELECT 1 FROM Users WHERE username = :u"), {"u": uname}
             ).fetchone()
-            
+
             if not existing:
                 pwd_hash = bcrypt.hashpw(pwd.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
                 session.execute(
@@ -67,14 +67,14 @@ def login_screen():
         st.markdown("<br><br>", unsafe_allow_html=True)
         st.markdown("<h1 style='text-align: center;'>♟️ Check N Mate</h1>", unsafe_allow_html=True)
         st.markdown("<p style='text-align: center; color: #666;'>Secure Fee Management & Operations Portal</p><br>", unsafe_allow_html=True)
-        
+
         with st.form("login_form"):
             st.markdown("### 🔒 Database Authentication")
             username_input = st.text_input("Username")
             password_input = st.text_input("Password", type="password")
             st.markdown("<br>", unsafe_allow_html=True)
             submit_login = st.form_submit_button("Sign In", use_container_width=True)
-            
+
             if submit_login:
                 try:
                     df_user = conn.query(
@@ -82,7 +82,7 @@ def login_screen():
                         params={"uname": username_input.strip().lower()},
                         ttl="0m"
                     )
-                    
+
                     if not df_user.empty:
                         stored_hash = df_user.iloc[0]["password_hash"]
                         if bcrypt.checkpw(password_input.encode('utf-8'), stored_hash.encode('utf-8')):
@@ -146,11 +146,14 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "🧑‍🎓 Student Management"
 ])
 
-def get_scoped_students_query():
+def get_scoped_students_query(pending_only=False):
+    base_filter = "WHERE payment_status = 'Pending'" if pending_only else ""
     if st.session_state["role"] in ["Admin", "Company"]:
-        return "SELECT id, student_name, parent_phone, fee_amount, due_date, payment_status, franchise_name, last_updated_by FROM Students ORDER BY due_date ASC;"
+        return f"SELECT id, student_name, parent_phone, fee_amount, due_date, payment_status, franchise_name, last_updated_by FROM Students {base_filter} ORDER BY due_date ASC;"
     else:
-        return f"SELECT id, student_name, parent_phone, fee_amount, due_date, payment_status, franchise_name, last_updated_by FROM Students WHERE franchise_name = '{st.session_state['franchise_name']}' ORDER BY due_date ASC;"
+        center = st.session_state['franchise_name']
+        prefix = f"{base_filter} AND" if pending_only else "WHERE"
+        return f"SELECT id, student_name, parent_phone, fee_amount, due_date, payment_status, franchise_name, last_updated_by FROM Students {prefix} franchise_name = '{center}' ORDER BY due_date ASC;"
 
 # --- TAB 1: ACTIVE ROSTER ---
 with tab1:
@@ -159,7 +162,7 @@ with tab1:
     with col_a:
         if st.button("🔄 Refresh Data", use_container_width=True):
             st.cache_data.clear()
-        
+
     try:
         query = get_scoped_students_query()
         df = conn.query(query, ttl="0m")
@@ -173,14 +176,13 @@ with tab2:
     if st.button("🚀 Execute Daily Notification Batch", type="primary"):
         with st.spinner("Processing pending payments..."):
             try:
-                base_q = get_scoped_students_query().replace("ORDER BY due_date ASC;", "AND payment_status = 'Pending' ORDER BY due_date ASC;")
-                df = conn.query(base_q, ttl="0m")
+                df = conn.query(get_scoped_students_query(pending_only=True), ttl="0m")
                 if df.empty:
                     st.info("No pending payments found.")
                 else:
                     df['due_date'] = pd.to_datetime(df['due_date']).dt.date
                     today = datetime.now().date()
-                    
+
                     upcoming_students = df[df['due_date'] == today + timedelta(days=3)]
                     overdue_students = df[df['due_date'] < today]
 
@@ -192,7 +194,7 @@ with tab2:
                                 st.success(f"✅ Sent to **{row['student_name']}** via {delivery_type} | [Payment Link]({link})")
                             except Exception as err:
                                 st.error(f"❌ Failed for {row['student_name']}: {err}")
-                            
+
                     if not overdue_students.empty:
                         st.subheader(f"Overdue Notices ({len(overdue_students)})")
                         for _, row in overdue_students.iterrows():
@@ -208,9 +210,9 @@ with tab2:
 with tab3:
     st.header("🗓️ Manage Due Dates")
     st.caption("Update individual deadlines or use bulk update across records.")
-    
+
     col_single, col_bulk = st.columns(2)
-    
+
     with col_single:
         st.subheader("👤 Individual Update")
         try:
@@ -219,13 +221,13 @@ with tab3:
                 with st.form("single_update_form"):
                     student_map = dict(zip(df_students['student_name'], df_students['id']))
                     selected_student = st.selectbox("Select Student", list(student_map.keys()))
-                    
+
                     curr_date = df_students[df_students['student_name'] == selected_student]['due_date'].iloc[0]
                     st.write(f"Current due date: **{curr_date}**")
-                    
+
                     new_due_date = st.date_input("New Due Date", key="single_date_input")
                     submit_single = st.form_submit_button("Update Student")
-                    
+
                     if submit_single:
                         student_id = int(student_map[selected_student])
                         with conn.session as session:
@@ -246,7 +248,7 @@ with tab3:
         with st.form("bulk_update_form"):
             bulk_date = st.date_input("Set Date for Records", key="bulk_date_input")
             submit_bulk = st.form_submit_button("Apply Update")
-            
+
             if submit_bulk:
                 try:
                     with conn.session as session:
@@ -269,7 +271,7 @@ with tab3:
 # --- TAB 4: STUDENT MANAGEMENT ---
 with tab4:
     st.header("🧑‍🎓 Student Directory & Operations")
-    
+
     st.subheader("Current Database View")
     try:
         df_students = conn.query(get_scoped_students_query(), ttl="0m")
@@ -283,7 +285,7 @@ with tab4:
 
     st.divider()
     st.subheader("Administrative Actions")
-    
+
     action_tabs = st.tabs(["➕ Enroll Student", "✏️ Update Profile", "❌ Remove Student"])
 
     with action_tabs[0]:
@@ -300,7 +302,7 @@ with tab4:
             with c3:
                 new_status = st.selectbox("Status", ["Pending", "Paid"])
                 new_franchise = st.selectbox("Assign to Franchise", franchise_choices)
-                
+
             if st.form_submit_button("Add to Database"):
                 if not new_name or not new_phone:
                     st.error("Name and Phone are required.")
@@ -309,7 +311,7 @@ with tab4:
                         with conn.session as session:
                             check_query = text("SELECT COUNT(*) FROM Students WHERE student_name = :name AND parent_phone = :phone")
                             duplicate_count = session.execute(check_query, {"name": new_name, "phone": new_phone}).scalar()
-                            
+
                             if duplicate_count > 0:
                                 st.error(f"⚠️ A student named **{new_name}** with the phone number **{new_phone}** is already enrolled!")
                             else:
@@ -320,7 +322,7 @@ with tab4:
                                 session.commit()
                                 st.success(f"Successfully added {new_name} to {new_franchise}!")
                                 st.cache_data.clear()
-                                
+
                     except Exception as e:
                         st.error(f"Error adding student: {e}")
 
@@ -328,12 +330,12 @@ with tab4:
         if not df_students.empty:
             student_map = dict(zip(df_students['student_name'], df_students['id']))
             selected = st.selectbox("Select Student to Update", list(student_map.keys()))
-            
+
             curr_data = df_students[df_students['student_name'] == selected].iloc[0]
             curr_franchise = curr_data.get('franchise_name', 'Company HQ')
             franchise_choices = FRANCHISE_OPTIONS if st.session_state["role"] in ["Admin", "Company"] else [st.session_state["franchise_name"]]
             franchise_idx = franchise_choices.index(curr_franchise) if curr_franchise in franchise_choices else 0
-            
+
             with st.form("update_student_form"):
                 c1, c2, c3 = st.columns(3)
                 with c1:
@@ -344,7 +346,7 @@ with tab4:
                     upd_status = st.selectbox("Status", ["Pending", "Paid"], index=0 if curr_data['payment_status'] == "Pending" else 1)
                 with c3:
                     upd_franchise = st.selectbox("Franchise", franchise_choices, index=franchise_idx)
-                
+
                 if st.form_submit_button("Save Changes"):
                     try:
                         with conn.session as session:
@@ -367,10 +369,10 @@ with tab4:
             if not df_students.empty:
                 student_map = dict(zip(df_students['student_name'], df_students['id']))
                 del_selected = st.selectbox("Select Student to Permanently Delete", list(student_map.keys()))
-                
+
                 st.warning(f"You are about to permanently remove **{del_selected}**.")
                 confirm_delete = st.checkbox("I confirm that I want to delete this record.")
-                
+
                 if st.button("⚠️ Permanently Delete Record", type="primary", disabled=not confirm_delete):
                     try:
                         with conn.session as session:
